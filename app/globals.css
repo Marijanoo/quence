@@ -1,0 +1,144 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Dark theme by default for developer tool */
+  --background: oklch(0.12 0.01 260);
+  --foreground: oklch(0.95 0 0);
+  --card: oklch(0.16 0.01 260);
+  --card-foreground: oklch(0.95 0 0);
+  --popover: oklch(0.18 0.01 260);
+  --popover-foreground: oklch(0.95 0 0);
+  --primary: oklch(0.72 0.19 160);
+  --primary-foreground: oklch(0.12 0.01 260);
+  --secondary: oklch(0.22 0.01 260);
+  --secondary-foreground: oklch(0.85 0 0);
+  --muted: oklch(0.2 0.01 260);
+  --muted-foreground: oklch(0.6 0 0);
+  --accent: oklch(0.72 0.19 160);
+  --accent-foreground: oklch(0.12 0.01 260);
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.95 0 0);
+  --border: oklch(0.26 0.01 260);
+  --input: oklch(0.2 0.01 260);
+  --ring: oklch(0.72 0.19 160);
+  --radius: 0.5rem;
+  
+  /* Method badge colors */
+  --method-get: oklch(0.72 0.19 160);
+  --method-post: oklch(0.75 0.18 80);
+  --method-put: oklch(0.65 0.2 250);
+  --method-patch: oklch(0.7 0.15 300);
+  --method-delete: oklch(0.65 0.22 25);
+  --method-head: oklch(0.6 0.12 200);
+  --method-options: oklch(0.55 0.1 0);
+  
+  /* Status colors */
+  --status-success: oklch(0.72 0.19 160);
+  --status-redirect: oklch(0.65 0.2 250);
+  --status-client-error: oklch(0.75 0.18 80);
+  --status-server-error: oklch(0.65 0.22 25);
+  
+  /* Sidebar */
+  --sidebar: oklch(0.14 0.01 260);
+  --sidebar-foreground: oklch(0.95 0 0);
+  --sidebar-primary: oklch(0.72 0.19 160);
+  --sidebar-primary-foreground: oklch(0.12 0.01 260);
+  --sidebar-accent: oklch(0.22 0.01 260);
+  --sidebar-accent-foreground: oklch(0.95 0 0);
+  --sidebar-border: oklch(0.26 0.01 260);
+  --sidebar-ring: oklch(0.72 0.19 160);
+  
+  /* Chart colors */
+  --chart-1: oklch(0.72 0.19 160);
+  --chart-2: oklch(0.75 0.18 80);
+  --chart-3: oklch(0.65 0.2 250);
+  --chart-4: oklch(0.7 0.15 300);
+  --chart-5: oklch(0.65 0.22 25);
+}
+
+@theme inline {
+  --font-sans: 'Geist', 'Geist Fallback';
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: oklch(0.14 0.01 260);
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.3 0.01 260);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.4 0.01 260);
+}
+
+/* Code/JSON highlighting for response viewer */
+.code-editor {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.code-editor .key { color: var(--primary); font-weight: 500; }
+.code-editor .string { color: oklch(0.8 0.12 150); }   /* Soft green */
+.code-editor .number { color: oklch(0.8 0.15 80); }    /* Warm yellow */
+.code-editor .boolean { color: oklch(0.75 0.18 280); } /* Vibrant violet */
+.code-editor .null { color: oklch(0.65 0.05 260); }    /* Subdued blue-grey */
+.code-editor .punctuation { color: var(--foreground); opacity: 0.6; }
