@@ -6,7 +6,7 @@ import { CodeViewer } from './code-viewer'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Copy, Check, Clock, Database, FileDown, Music, Film } from 'lucide-react'
+import { Copy, Check, Clock, Database, FileDown, Music, Film, Eye, Code2 } from 'lucide-react'
 
 interface ResponseViewerProps {
   response: ResponseData | null
@@ -27,25 +27,19 @@ function getStatusColor(status: number): string {
   return 'text-[oklch(0.65_0.22_25)] bg-[oklch(0.65_0.22_25)]/10'
 }
 
-// Inject <base href> into HTML so absolute-path refs like /styles.css resolve correctly
 function injectBaseHref(html: string, url?: string): string {
   if (!url) return html
   try {
     const origin = new URL(url).origin
     const baseTag = `<base href="${origin}/">`
-    if (/<head\b[^>]*>/i.test(html)) {
-      return html.replace(/<head\b[^>]*>/i, m => m + baseTag)
-    }
-    if (/<html\b[^>]*>/i.test(html)) {
-      return html.replace(/<html\b[^>]*>/i, m => m + `<head>${baseTag}</head>`)
-    }
+    if (/<head\b[^>]*>/i.test(html)) return html.replace(/<head\b[^>]*>/i, m => m + baseTag)
+    if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b[^>]*>/i, m => m + `<head>${baseTag}</head>`)
     return `<head>${baseTag}</head>${html}`
   } catch {
     return html
   }
 }
 
-// Decode base64 binary into a Blob URL usable by media elements and iframes
 function base64ToBlobUrl(b64: string, mimeType: string): string {
   const binary = atob(b64)
   const bytes = new Uint8Array(binary.length)
@@ -56,8 +50,11 @@ function base64ToBlobUrl(b64: string, mimeType: string): string {
 export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
   const [copied, setCopied] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [previewMode, setPreviewMode] = useState<'file' | 'raw'>('file')
 
-  // Create and clean up a blob URL whenever binary content changes
+  // Reset preview mode when response changes
+  useEffect(() => { setPreviewMode('file') }, [response?.body])
+
   useEffect(() => {
     if (!response?.isBinary || !response.body) {
       setBlobUrl(null)
@@ -140,28 +137,14 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
         </div>
         <div className="flex-1" />
         {response.isBinary && blobUrl && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={downloadBinary}
-            className="text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="ghost" size="sm" onClick={downloadBinary} className="text-muted-foreground hover:text-foreground">
             <FileDown className="h-4 w-4 mr-1" />
             Download
           </Button>
         )}
         {!response.isBinary && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={copyResponse}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {copied ? (
-              <><Check className="h-4 w-4 mr-1" />Copied</>
-            ) : (
-              <><Copy className="h-4 w-4 mr-1" />Copy</>
-            )}
+          <Button variant="ghost" size="sm" onClick={copyResponse} className="text-muted-foreground hover:text-foreground">
+            {copied ? <><Check className="h-4 w-4 mr-1" />Copied</> : <><Copy className="h-4 w-4 mr-1" />Copy</>}
           </Button>
         )}
       </div>
@@ -173,24 +156,15 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
         className="flex-1 flex flex-col min-h-0"
       >
         <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0">
-          <TabsTrigger
-            value="body"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
-          >
+          <TabsTrigger value="body" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2">
             Body
           </TabsTrigger>
           {hasPreview && (
-            <TabsTrigger
-              value="preview"
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
-            >
+            <TabsTrigger value="preview" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2">
               Preview
             </TabsTrigger>
           )}
-          <TabsTrigger
-            value="headers"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
-          >
+          <TabsTrigger value="headers" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2">
             Headers ({Object.keys(response.headers).length})
           </TabsTrigger>
         </TabsList>
@@ -232,52 +206,94 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
 
         {/* Preview tab */}
         {hasPreview && (
-          <TabsContent value="preview" className="flex-1 m-0 p-0 min-h-0">
-            {isImage ? (
-              <div className="flex items-center justify-center h-full p-8 overflow-auto bg-[oklch(0.1_0_0)]">
-                <img
-                  src={`data:${ct};base64,${response.body}`}
-                  alt="Response image"
-                  className="max-w-full h-auto"
-                  style={{ imageRendering: 'auto' }}
-                />
+          <TabsContent value="preview" className="flex-1 m-0 p-0 min-h-0 flex flex-col">
+            {/* File / Raw toggle for binary responses */}
+            {response.isBinary && (
+              <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border bg-card shrink-0">
+                <button
+                  onClick={() => setPreviewMode('file')}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors',
+                    previewMode === 'file'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  )}
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  File
+                </button>
+                <button
+                  onClick={() => setPreviewMode('raw')}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors',
+                    previewMode === 'raw'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  )}
+                >
+                  <Code2 className="h-3.5 w-3.5" />
+                  Raw
+                </button>
               </div>
-            ) : isPdf ? (
-              blobUrl ? (
+            )}
+
+            <div className="flex-1 min-h-0 overflow-auto">
+              {previewMode === 'raw' && response.isBinary ? (
+                <div className="p-4">
+                  <CodeViewer data={response.body} language="auto" />
+                </div>
+              ) : isImage ? (
+                <div
+                  className="flex items-center justify-center h-full overflow-auto p-8"
+                  style={{
+                    backgroundImage:
+                      'linear-gradient(45deg, oklch(0.25 0 0) 25%, transparent 25%),' +
+                      'linear-gradient(-45deg, oklch(0.25 0 0) 25%, transparent 25%),' +
+                      'linear-gradient(45deg, transparent 75%, oklch(0.25 0 0) 75%),' +
+                      'linear-gradient(-45deg, transparent 75%, oklch(0.25 0 0) 75%)',
+                    backgroundSize: '20px 20px',
+                    backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
+                    backgroundColor: 'oklch(0.18 0 0)',
+                  }}
+                >
+                  {blobUrl && (
+                    <img
+                      src={blobUrl}
+                      alt="Response image"
+                      className="max-w-full h-auto"
+                      style={{ imageRendering: 'auto' }}
+                    />
+                  )}
+                </div>
+              ) : isPdf ? (
+                blobUrl ? (
+                  <iframe src={blobUrl} title="PDF Preview" className="w-full h-full border-none" />
+                ) : (
+                  <BinaryFallback contentType={ct} size={response.size} onDownload={downloadBinary} hasBlobUrl={false} />
+                )
+              ) : isAudio ? (
+                <div className="flex flex-col items-center justify-center h-full gap-6">
+                  <Music className="h-16 w-16 text-primary opacity-60" />
+                  <p className="text-sm text-muted-foreground">{ct}</p>
+                  {blobUrl && <audio src={blobUrl} controls className="w-full max-w-lg px-8" />}
+                </div>
+              ) : isVideo ? (
+                <div className="flex items-center justify-center h-full bg-black p-4">
+                  {blobUrl
+                    ? <video src={blobUrl} controls className="max-w-full max-h-full" />
+                    : <Film className="h-16 w-16 text-white opacity-30" />}
+                </div>
+              ) : isHtml ? (
                 <iframe
-                  src={blobUrl}
-                  title="PDF Preview"
-                  className="w-full h-full border-none"
+                  srcDoc={injectBaseHref(response.body, response.url)}
+                  title="HTML Preview"
+                  className="w-full h-full border-none bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                 />
               ) : (
-                <BinaryFallback contentType={ct} size={response.size} onDownload={downloadBinary} hasBlobUrl={false} />
-              )
-            ) : isAudio ? (
-              <div className="flex flex-col items-center justify-center h-full gap-6">
-                <Music className="h-16 w-16 text-primary opacity-60" />
-                <p className="text-sm text-muted-foreground">{ct}</p>
-                {blobUrl && (
-                  <audio src={blobUrl} controls className="w-full max-w-lg px-8" />
-                )}
-              </div>
-            ) : isVideo ? (
-              <div className="flex items-center justify-center h-full bg-black p-4">
-                {blobUrl ? (
-                  <video src={blobUrl} controls className="max-w-full max-h-full" />
-                ) : (
-                  <Film className="h-16 w-16 text-white opacity-30" />
-                )}
-              </div>
-            ) : isHtml ? (
-              <iframe
-                srcDoc={injectBaseHref(response.body, response.url)}
-                title="HTML Preview"
-                className="w-full h-full border-none bg-white"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              />
-            ) : (
-              <BinaryFallback contentType={ct} size={response.size} onDownload={downloadBinary} hasBlobUrl={!!blobUrl} />
-            )}
+                <BinaryFallback contentType={ct} size={response.size} onDownload={downloadBinary} hasBlobUrl={!!blobUrl} />
+              )}
+            </div>
           </TabsContent>
         )}
 

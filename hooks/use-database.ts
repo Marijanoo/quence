@@ -5,11 +5,13 @@ import type {
   Workspace,
   Collection,
   RequestConfig,
+  SocketConfig,
   HistoryEntry,
   Environment,
   WorkspaceState,
   WorkspaceTab,
   ResponseData,
+  Sequence,
 } from '@/lib/db/types'
 import {
   createNewRequest,
@@ -17,6 +19,7 @@ import {
   createNewEnvironment,
   createNewWorkspace,
 } from '@/lib/db/types'
+import { generateId } from '@/lib/utils'
 
 const ACTIVE_WORKSPACE_KEY = 'postman-lite-active-workspace'
 
@@ -151,7 +154,7 @@ export function useCollections(workspaceId?: string | null) {
   const refresh = useCallback(async () => {
     if (!db || !workspaceId) return
     const data = await db.getCollections(workspaceId)
-    setCollections(data.sort((a, b) => a.name.localeCompare(b.name)))
+    setCollections(data.sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt)))
   }, [db, workspaceId])
 
   useEffect(() => {
@@ -187,6 +190,14 @@ export function useCollections(workspaceId?: string | null) {
     await refresh()
   }, [db, refresh, workspaceId])
 
+  const reorder = useCallback(async (ordered: Collection[]) => {
+    if (!db) return
+    for (let i = 0; i < ordered.length; i++) {
+      await db.updateCollection(ordered[i].id, { order: i })
+    }
+    setCollections(ordered.map((c, i) => ({ ...c, order: i })))
+  }, [db])
+
   return {
     collections,
     isLoading: isLoading || dbLoading,
@@ -194,6 +205,7 @@ export function useCollections(workspaceId?: string | null) {
     update,
     remove,
     importCollection,
+    reorder,
     refresh,
   }
 }
@@ -207,7 +219,7 @@ export function useRequests(collectionId?: string) {
   const refresh = useCallback(async () => {
     if (!db) return
     const data = await db.getRequests(collectionId)
-    setRequests(data.sort((a, b) => a.name.localeCompare(b.name)))
+    setRequests(data.sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt)))
   }, [db, collectionId])
 
   useEffect(() => {
@@ -242,7 +254,99 @@ export function useRequests(collectionId?: string) {
     await refresh()
   }, [db, refresh])
 
-  return { requests, isLoading: isLoading || dbLoading, create, update, remove, importRequests, refresh }
+  const reorderRequests = useCallback(async (ordered: RequestConfig[]) => {
+    if (!db) return
+    for (let i = 0; i < ordered.length; i++) {
+      await db.updateRequest(ordered[i].id, { order: i })
+    }
+    await refresh()
+  }, [db, refresh])
+
+  return { requests, isLoading: isLoading || dbLoading, create, update, remove, importRequests, reorderRequests, refresh }
+}
+
+// Socket configs hook
+export function useSocketConfigs() {
+  const { db, isLoading: dbLoading } = useDatabase()
+  const [socketConfigs, setSocketConfigs] = useState<SocketConfig[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  const refresh = useCallback(async () => {
+    if (!db) return
+    const data = await db.getSocketConfigs()
+    setSocketConfigs(data.sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt)))
+  }, [db])
+
+  useEffect(() => {
+    if (db && !dbLoading) {
+      refresh().then(() => setIsLoading(false))
+    }
+  }, [db, dbLoading, refresh])
+
+  const create = useCallback(async (config: SocketConfig) => {
+    if (!db) return
+    await db.createSocketConfig(config)
+    await refresh()
+  }, [db, refresh])
+
+  const update = useCallback(async (id: string, data: Partial<SocketConfig>) => {
+    if (!db) return
+    await db.updateSocketConfig(id, data)
+    await refresh()
+  }, [db, refresh])
+
+  const remove = useCallback(async (id: string) => {
+    if (!db) return
+    await db.deleteSocketConfig(id)
+    await refresh()
+  }, [db, refresh])
+
+  const importSocketConfigs = useCallback(async (configs: SocketConfig[]) => {
+    if (!db) return
+    for (const c of configs) await db.createSocketConfig(c)
+    await refresh()
+  }, [db, refresh])
+
+  return { socketConfigs, isLoading: isLoading || dbLoading, create, update, remove, importSocketConfigs, refresh }
+}
+
+// Sequences hook
+export function useSequences() {
+  const { db, isLoading: dbLoading } = useDatabase()
+  const [sequences, setSequences] = useState<Sequence[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  const refresh = useCallback(async () => {
+    if (!db) return
+    const data = await db.getSequences()
+    setSequences(data.sort((a, b) => a.createdAt - b.createdAt))
+  }, [db])
+
+  useEffect(() => {
+    if (db && !dbLoading) {
+      refresh().then(() => setIsLoading(false))
+    }
+  }, [db, dbLoading, refresh])
+
+  const create = useCallback(async (seq: Sequence) => {
+    if (!db) return
+    await db.createSequence(seq)
+    await refresh()
+  }, [db, refresh])
+
+  const update = useCallback(async (id: string, data: Partial<Sequence>) => {
+    if (!db) return
+    await db.updateSequence(id, data)
+    await refresh()
+  }, [db, refresh])
+
+  const remove = useCallback(async (id: string) => {
+    if (!db) return
+    await db.deleteSequence(id)
+    await refresh()
+  }, [db, refresh])
+
+  return { sequences, isLoading: isLoading || dbLoading, create, update, remove, refresh }
 }
 
 // History hook
@@ -366,7 +470,7 @@ export function useWorkspace(workspaceId?: string | null) {
         setState(saved)
       } else {
         const newTab: WorkspaceTab = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           request: createNewRequest(),
           response: null,
           isDirty: false,
@@ -389,7 +493,7 @@ export function useWorkspace(workspaceId?: string | null) {
 
   const createTab = useCallback(async (request?: RequestConfig, requestId?: string) => {
     const newTab: WorkspaceTab = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       requestId,
       request: request || createNewRequest(),
       response: null,
@@ -408,7 +512,7 @@ export function useWorkspace(workspaceId?: string | null) {
         newActiveId = newTabs[Math.min(tabIndex, newTabs.length - 1)].id
       } else {
         const newTab: WorkspaceTab = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           request: createNewRequest(),
           response: null,
           isDirty: false,
@@ -446,6 +550,10 @@ export function useWorkspace(workspaceId?: string | null) {
     await updateTab(tabId, { requestId, isDirty: false })
   }, [updateTab])
 
+  const reorderTabs = useCallback(async (reordered: WorkspaceTab[]) => {
+    await saveState({ ...state, tabs: reordered })
+  }, [state, saveState])
+
   return {
     tabs: state.tabs,
     activeTab,
@@ -458,5 +566,6 @@ export function useWorkspace(workspaceId?: string | null) {
     updateActiveRequest,
     setActiveResponse,
     markTabSaved,
+    reorderTabs,
   }
 }

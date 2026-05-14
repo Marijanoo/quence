@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+
 import type { EnvironmentVariable } from '@/lib/db/types'
 import { cn } from '@/lib/utils'
 import {
@@ -11,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Check, X } from 'lucide-react'
+import { SearchBar } from './search-bar'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -107,8 +109,8 @@ function VariableTag({ variableName, fullMatch, variables, onUpdateVariable }: V
           className={cn(
             'inline-block px-1 rounded cursor-pointer transition-colors',
             resolved
-              ? 'bg-[oklch(0.45_0.15_160)] text-[oklch(0.9_0.1_160)] hover:bg-[oklch(0.5_0.15_160)]'
-              : 'bg-[oklch(0.45_0.18_30)] text-[oklch(0.9_0.1_30)] hover:bg-[oklch(0.5_0.18_30)]',
+              ? 'bg-[oklch(0.35_0.12_160)] text-[oklch(0.85_0.15_160)] hover:bg-[oklch(0.4_0.12_160)]'
+              : 'bg-[oklch(0.35_0.15_30)] text-[oklch(0.85_0.12_30)] hover:bg-[oklch(0.4_0.15_30)]',
           )}
           title={resolved ? `${variableName} = ${currentValue}` : `${variableName} (unresolved)`}
         >
@@ -123,7 +125,7 @@ function VariableTag({ variableName, fullMatch, variables, onUpdateVariable }: V
               {resolved ? 'Resolved' : 'Unresolved'}
             </span>
           </div>
-          {resolved && <div className="text-xs text-muted-foreground">Current: <span className="font-mono text-foreground">{currentValue}</span></div>}
+          {resolved && <div className="text-xs text-muted-foreground">Current: <span className="font-mono text-foreground truncate max-w-[180px] inline-block align-bottom" title={currentValue}>{currentValue}</span></div>}
           {onUpdateVariable && (
             <div className="space-y-2">
               <label className="text-xs text-muted-foreground">{resolved ? 'Update value:' : 'Set value:'}</label>
@@ -177,11 +179,50 @@ function renderLineContent({ text, language, variables, onUpdateVariable }: Line
   return <>{nodes}</>
 }
 
+// ─── Search highlight renderer ───────────────────────────────────────────────
+
+function renderSearchHighlights(lines: string[], query: string, activeMatch: number): React.ReactNode {
+  const q = query.toLowerCase()
+  const nodes: React.ReactNode[] = []
+  let globalMatchIndex = 0
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]
+    const lower = line.toLowerCase()
+    const parts: React.ReactNode[] = []
+    let pos = 0
+
+    while (pos <= line.length) {
+      const idx = lower.indexOf(q, pos)
+      if (idx === -1) {
+        parts.push(<span key={`t${pos}`}>{line.slice(pos)}</span>)
+        break
+      }
+      if (idx > pos) parts.push(<span key={`t${pos}`}>{line.slice(pos, idx)}</span>)
+      const cls = globalMatchIndex === activeMatch ? 'search-match-active' : 'search-match'
+      parts.push(
+        <mark key={`m${idx}`} className={cls}>{line.slice(idx, idx + q.length)}</mark>
+      )
+      globalMatchIndex++
+      pos = idx + q.length
+    }
+
+    nodes.push(
+      <div key={lineIdx} style={{ lineHeight: `${LINE_HEIGHT}px`, minHeight: `${LINE_HEIGHT}px`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+        {parts}
+      </div>
+    )
+  }
+
+  return <>{nodes}</>
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface VariableHighlightTextareaProps {
   value: string
   onChange: (value: string) => void
+  onKeyDown?: (e: React.KeyboardEvent) => void
   placeholder?: string
   className?: string
   variables: EnvironmentVariable[]
@@ -189,22 +230,195 @@ interface VariableHighlightTextareaProps {
   language?: 'json' | 'text'
 }
 
+interface HistoryEntry { value: string; ss: number; se: number }
+
 export function VariableHighlightTextarea({
   value,
   onChange,
+  onKeyDown: onKeyDownProp,
   placeholder,
   className,
   variables,
   onUpdateVariable,
   language = 'text',
 }: VariableHighlightTextareaProps) {
+  const [localValue, setLocalValue] = useState(value)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)   // the scrolling container
   const gutterRef = useRef<HTMLDivElement>(null)
   const [activeLine, setActiveLine] = useState(0)
+  const [scrollTop, setScrollTop] = useState(0)
 
-  const lines = value.split('\n')
+  const isComposingRef = useRef(false)
+  const onChangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Sync with prop value only when it changes externally (not from our own edits)
+  useEffect(() => {
+    if (!isComposingRef.current) {
+      setLocalValue(value)
+    }
+  }, [value])
+
+  const handleChange = (val: string, immediate = false) => {
+    setLocalValue(val)
+    if (onChangeDebounceRef.current) clearTimeout(onChangeDebounceRef.current)
+    if (immediate) {
+      onChange(val)
+    } else {
+      onChangeDebounceRef.current = setTimeout(() => { onChange(val) }, 150)
+    }
+  }
+
+  // ── Custom undo/redo stack ────────────────────────────────────────────────
+  const historyRef = useRef<HistoryEntry[]>([{ value, ss: 0, se: 0 }])
+  const historyIndexRef = useRef(0)
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Save a checkpoint immediately (for structural edits like Enter/Tab/pair)
+  const saveCheckpoint = useCallback((val: string, ss: number, se: number) => {
+    if (debounceTimerRef.current) { clearTimeout(debounceTimerRef.current); debounceTimerRef.current = null }
+    const history = historyRef.current
+    const idx = historyIndexRef.current
+    const last = history[idx]
+    if (last?.value === val) return
+    const next = history.slice(0, idx + 1)
+    next.push({ value: val, ss, se })
+    if (next.length > 200) next.shift()
+    historyRef.current = next
+    historyIndexRef.current = next.length - 1
+  }, [])
+
+  // Debounced checkpoint for regular typing — fires 500ms after last keystroke
+  const scheduleCheckpoint = useCallback((val: string, ss: number, se: number) => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null
+      saveCheckpoint(val, ss, se)
+    }, 500)
+  }, [saveCheckpoint])
+
+  const applyHistory = useCallback((entry: HistoryEntry) => {
+    handleChange(entry.value, true)
+    setTimeout(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.selectionStart = entry.ss
+      ta.selectionEnd = entry.se
+      setActiveLine(ta.value.slice(0, entry.ss).split('\n').length - 1)
+    }, 0)
+  }, [handleChange])
+
+  const undo = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
+      const ta = textareaRef.current
+      saveCheckpoint(localValue, ta?.selectionStart ?? 0, ta?.selectionEnd ?? 0)
+    }
+    const idx = historyIndexRef.current
+    if (idx <= 0) return
+    historyIndexRef.current = idx - 1
+    applyHistory(historyRef.current[idx - 1])
+  }, [localValue, saveCheckpoint, applyHistory])
+
+  const redo = useCallback(() => {
+    const history = historyRef.current
+    const idx = historyIndexRef.current
+    if (idx >= history.length - 1) return
+    historyIndexRef.current = idx + 1
+    applyHistory(history[idx + 1])
+  }, [applyHistory])
+
+  // Keep history in sync when value changes externally (e.g. beautify)
+  const prevValueRef = useRef(value)
+  useEffect(() => {
+    if (value !== prevValueRef.current) {
+      prevValueRef.current = value
+      const inHistory = historyRef.current[historyIndexRef.current]?.value === value
+      if (!inHistory) saveCheckpoint(value, 0, 0)
+    }
+  }, [value, saveCheckpoint])
+
+
+  // ── Search state ──────────────────────────────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatch, setSearchMatch] = useState(0)
+
+  const searchMatchCount = useMemo(() => {
+    if (!searchQuery) return 0
+    const lower = value.toLowerCase()
+    const q = searchQuery.toLowerCase()
+    let count = 0
+    let idx = 0
+    while ((idx = lower.indexOf(q, idx)) !== -1) { count++; idx += q.length }
+    return count
+  }, [value, searchQuery])
+
+  useEffect(() => {
+    if (searchMatchCount === 0) setSearchMatch(0)
+    else setSearchMatch(prev => Math.min(prev, searchMatchCount - 1))
+  }, [searchMatchCount])
+
+  // Scroll textarea to show current match
+  useEffect(() => {
+    if (!searchOpen || !searchQuery || searchMatchCount === 0) return
+    const ta = textareaRef.current
+    if (!ta) return
+    const lower = value.toLowerCase()
+    const q = searchQuery.toLowerCase()
+    let idx = -1
+    let count = 0
+    let search = 0
+    while ((idx = lower.indexOf(q, search)) !== -1) {
+      if (count === searchMatch) break
+      count++
+      search = idx + q.length
+    }
+    if (idx === -1) return
+    // Scroll the overlay div to show the match line without stealing focus
+    const matchLine = value.slice(0, idx).split('\n').length - 1
+    const scrollTarget = matchLine * LINE_HEIGHT
+    const scrollDiv = scrollRef.current
+    if (scrollDiv) {
+      const visibleHeight = scrollDiv.clientHeight
+      const currentTop = ta.scrollTop
+      if (scrollTarget < currentTop || scrollTarget + LINE_HEIGHT > currentTop + visibleHeight) {
+        const newTop = scrollTarget - visibleHeight / 2 + LINE_HEIGHT / 2
+        ta.scrollTop = Math.max(0, newTop)
+        syncScroll()
+      }
+    }
+  }, [searchMatch, searchQuery, searchMatchCount, searchOpen, value])
+
+  const lines = localValue.split('\n')
   const lineCount = lines.length
+
+  // ── Line position tracking for wrapped lines ─────────────────────────────
+  // Each entry: { top: offsetTop relative to overlay content, height: offsetHeight }
+  const [linePositions, setLinePositions] = useState<{ top: number; height: number }[]>([])
+  const lineRefs = useRef<(HTMLDivElement | null)[]>([])
+  const roRef = useRef<ResizeObserver | null>(null)
+
+  const measureLines = useCallback(() => {
+    const overlay = scrollRef.current
+    if (!overlay) return
+    setLinePositions(lineRefs.current.map(el => {
+      if (!el) return { top: 0, height: LINE_HEIGHT }
+      return { top: el.offsetTop, height: el.offsetHeight }
+    }))
+  }, [])
+
+  useEffect(() => {
+    lineRefs.current = lineRefs.current.slice(0, lineCount)
+    roRef.current?.disconnect()
+    const ro = new ResizeObserver(measureLines)
+    lineRefs.current.forEach(el => { if (el) ro.observe(el) })
+    if (scrollRef.current) ro.observe(scrollRef.current)
+    roRef.current = ro
+    measureLines()
+    return () => ro.disconnect()
+  }, [lineCount, localValue, measureLines])
 
   // ── Scroll sync: textarea drives everything ──────────────────────────────
   const syncScroll = useCallback(() => {
@@ -214,9 +428,7 @@ export function VariableHighlightTextarea({
       scrollRef.current.scrollTop = ta.scrollTop
       scrollRef.current.scrollLeft = ta.scrollLeft
     }
-    if (gutterRef.current) {
-      gutterRef.current.scrollTop = ta.scrollTop
-    }
+    setScrollTop(ta.scrollTop)
   }, [])
 
   useEffect(() => {
@@ -240,30 +452,54 @@ export function VariableHighlightTextarea({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = textareaRef.current
     if (!ta) return
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault()
+      setSearchOpen(true)
+      return
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault()
+      undo()
+      return
+    }
+
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+      e.preventDefault()
+      redo()
+      return
+    }
+
     const { selectionStart: ss, selectionEnd: se } = ta
 
     if (e.key === 'Enter') {
       e.preventDefault()
-      const lineStart = value.lastIndexOf('\n', ss - 1) + 1
-      const currentLine = value.slice(lineStart, ss)
+      const lineStart = localValue.lastIndexOf('\n', ss - 1) + 1
+      const currentLine = localValue.slice(lineStart, ss)
       const indent = currentLine.match(/^\s*/)?.[0] ?? ''
       const extra = (currentLine.trimEnd().endsWith('{') || currentLine.trimEnd().endsWith('[')) ? '  ' : ''
-      const next = value.slice(0, ss) + '\n' + indent + extra + value.slice(se)
-      onChange(next)
-      const pos = ss + 1 + indent.length + extra.length
-      setTimeout(() => { ta.selectionStart = ta.selectionEnd = pos; updateActiveLine() }, 0)
+      const inserted = '\n' + indent + extra
+      const next = localValue.slice(0, ss) + inserted + localValue.slice(se)
+      const pos = ss + inserted.length
+      saveCheckpoint(localValue, ss, se)
+      handleChange(next, true)
+      setTimeout(() => { ta.selectionStart = ta.selectionEnd = pos; updateActiveLine(); saveCheckpoint(next, pos, pos) }, 0)
       return
     }
 
     if (e.key === 'Tab') {
       e.preventDefault()
-      onChange(value.slice(0, ss) + '  ' + value.slice(se))
-      setTimeout(() => { ta.selectionStart = ta.selectionEnd = ss + 2 }, 0)
+      const next = localValue.slice(0, ss) + '  ' + localValue.slice(se)
+      const pos = ss + 2
+      saveCheckpoint(localValue, ss, se)
+      handleChange(next, true)
+      setTimeout(() => { ta.selectionStart = ta.selectionEnd = pos; saveCheckpoint(next, pos, pos) }, 0)
       return
     }
 
-    // Skip over existing closer instead of inserting a new pair
-    if (closers.has(e.key) && ss === se && value[ss] === e.key) {
+    // Skip over existing closer
+    if (closers.has(e.key) && ss === se && localValue[ss] === e.key) {
       e.preventDefault()
       ta.selectionStart = ta.selectionEnd = ss + 1
       return
@@ -271,15 +507,22 @@ export function VariableHighlightTextarea({
 
     if (pairs[e.key]) {
       e.preventDefault()
-      onChange(value.slice(0, ss) + e.key + pairs[e.key] + value.slice(se))
-      setTimeout(() => { ta.selectionStart = ta.selectionEnd = ss + 1 }, 0)
+      const next = localValue.slice(0, ss) + e.key + pairs[e.key] + localValue.slice(se)
+      const pos = ss + 1
+      saveCheckpoint(localValue, ss, se)
+      handleChange(next, true)
+      setTimeout(() => { ta.selectionStart = ta.selectionEnd = pos; saveCheckpoint(next, pos, pos) }, 0)
       return
     }
 
-    if (e.key === 'Backspace' && ss === se && ss > 0 && pairs[value[ss - 1]] === value[ss]) {
+    if (e.key === 'Backspace' && ss === se && ss > 0 && pairs[localValue[ss - 1]] === localValue[ss]) {
       e.preventDefault()
-      onChange(value.slice(0, ss - 1) + value.slice(ss + 1))
-      setTimeout(() => { ta.selectionStart = ta.selectionEnd = ss - 1 }, 0)
+      const next = localValue.slice(0, ss - 1) + localValue.slice(ss + 1)
+      const pos = ss - 1
+      saveCheckpoint(localValue, ss, se)
+      handleChange(next, true)
+      setTimeout(() => { ta.selectionStart = ta.selectionEnd = pos; saveCheckpoint(next, pos, pos) }, 0)
+      return
     }
   }
 
@@ -290,86 +533,116 @@ export function VariableHighlightTextarea({
   return (
     <div
       className={cn(
-        'relative flex rounded-md border border-border overflow-hidden',
-        'bg-[oklch(0.18_0.01_260)]',
-        'min-h-[200px]',
+        'relative flex flex-col rounded-md border border-border overflow-hidden bg-card',
         className,
       )}
       style={{ fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE, lineHeight: `${LINE_HEIGHT}px` }}
     >
-      {/* ── Gutter ── */}
-      <div
-        ref={gutterRef}
-        className="flex-shrink-0 select-none overflow-hidden border-r border-border"
-        style={{
-          width: gutterWidth,
-          background: 'oklch(0.15 0.01 260)',
-          overflowY: 'hidden',
-        }}
-      >
-        {/* top padding row */}
-        <div style={{ height: 12 }} />
-        {lines.map((_, i) => (
-          <div
-            key={i}
-            style={{
-              height: LINE_HEIGHT,
-              lineHeight: `${LINE_HEIGHT}px`,
-              paddingRight: 10,
-              paddingLeft: 6,
-              textAlign: 'right',
-              color: i === activeLine ? 'var(--foreground)' : 'oklch(0.42 0 0)',
-              background: i === activeLine ? 'oklch(0.22 0.01 260)' : 'transparent',
-              transition: 'background 0.05s',
-            }}
-          >
-            {i + 1}
-          </div>
-        ))}
-      </div>
-
-      {/* ── Editor pane ── */}
+      {searchOpen && (
+        <SearchBar
+          query={searchQuery}
+          onQueryChange={(q) => { setSearchQuery(q); setSearchMatch(0) }}
+          matchCount={searchMatchCount}
+          currentMatch={searchMatch}
+          onNext={() => setSearchMatch(prev => (prev + 1) % (searchMatchCount || 1))}
+          onPrev={() => setSearchMatch(prev => (prev - 1 + (searchMatchCount || 1)) % (searchMatchCount || 1))}
+          onClose={() => { setSearchOpen(false); setSearchQuery(''); setSearchMatch(0); textareaRef.current?.focus() }}
+        />
+      )}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+      {/* ── Editor pane (gutter + content share the same scroll container) ── */}
       <div className="relative flex-1 min-w-0">
 
-        {/* Highlighted overlay — exact same layout as textarea */}
+        {/* Highlighted overlay — scrolls with textarea */}
         <div
           ref={scrollRef}
           className="code-editor absolute inset-0 overflow-hidden pointer-events-none"
-          style={{ padding: '12px 12px 12px 12px' }}
+          style={{ padding: `12px 12px 12px ${gutterWidth + 12}px` }}
         >
-          {/* Active line stripe — positioned relative to content top */}
+          {/* Active line stripe */}
           <div
             style={{
               position: 'absolute',
-              top: 12 + activeLine * LINE_HEIGHT,
+              top: linePositions[activeLine]?.top ?? (activeLine * LINE_HEIGHT + 12),
               left: 0,
               right: 0,
-              height: LINE_HEIGHT,
-              background: 'oklch(0.22 0.01 260)',
+              height: linePositions[activeLine]?.height ?? LINE_HEIGHT,
+              background: 'var(--secondary)',
               pointerEvents: 'none',
             }}
           />
 
           {/* Per-line highlighted content */}
-          {value === '' ? (
-            <div style={{ color: 'var(--muted-foreground)', height: LINE_HEIGHT, lineHeight: `${LINE_HEIGHT}px` }}>
-              {placeholder}
+          {lines.map((line, i) => (
+            <div
+              key={i}
+              ref={el => { lineRefs.current[i] = el }}
+              style={{ lineHeight: `${LINE_HEIGHT}px`, minHeight: `${LINE_HEIGHT}px`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', position: 'relative', zIndex: 1 }}
+            >
+              {localValue === '' && i === 0
+                ? <span style={{ color: 'var(--muted-foreground)' }}>{placeholder}</span>
+                : renderLineContent({ text: line, language, variables, onUpdateVariable })}
             </div>
-          ) : (
-            lines.map((line, i) => (
-              <div key={i} style={{ height: LINE_HEIGHT, lineHeight: `${LINE_HEIGHT}px`, whiteSpace: 'pre', position: 'relative', zIndex: 1 }}>
-                {renderLineContent({ text: line, language, variables, onUpdateVariable })}
-              </div>
-            ))
+          ))}
+
+          {/* Search match highlight layer */}
+          {searchOpen && searchQuery && (
+            <div style={{ position: 'absolute', top: 12, left: gutterWidth + 12, right: 0, pointerEvents: 'none', color: 'transparent', zIndex: 2 }}>
+              {renderSearchHighlights(lines, searchQuery, searchMatch)}
+            </div>
           )}
+        </div>
+
+        {/* Gutter — absolutely positioned left column, numbers pinned to overlay line tops */}
+        <div
+          ref={gutterRef}
+          className="absolute top-0 bottom-0 left-0 select-none pointer-events-none border-r border-border overflow-hidden"
+          style={{ width: gutterWidth, background: 'var(--background)', zIndex: 3 }}
+        >
+          {lines.map((_, i) => {
+            const pos = linePositions[i]
+            const top = (pos ? pos.top : i * LINE_HEIGHT + 12) - scrollTop
+            const height = pos?.height ?? LINE_HEIGHT
+            return (
+              <div
+                key={i}
+                style={{
+                  position: 'absolute',
+                  top,
+                  left: 0,
+                  width: '100%',
+                  height,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  paddingRight: 10,
+                  paddingLeft: 6,
+                  color: i === activeLine ? 'var(--foreground)' : 'var(--muted-foreground)',
+                  background: i === activeLine ? 'var(--secondary)' : 'transparent',
+                  transition: 'background 0.05s',
+                }}
+              >
+                {i + 1}
+              </div>
+            )
+          })}
         </div>
 
         {/* Actual textarea — transparent text, visible caret */}
         <textarea
           ref={textareaRef}
-          value={value}
-          onChange={(e) => { onChange(e.target.value); updateActiveLine() }}
-          onKeyDown={handleKeyDown}
+          value={localValue}
+          onChange={(e) => {
+            const val = e.target.value
+            const ss = e.target.selectionStart ?? 0
+            const se = e.target.selectionEnd ?? 0
+            isComposingRef.current = true
+            handleChange(val)
+            updateActiveLine()
+            scheduleCheckpoint(val, ss, se)
+          }}
+          onBlur={() => { isComposingRef.current = false }}
+          onKeyDown={(e) => { handleKeyDown(e); onKeyDownProp?.(e) }}
           onClick={updateActiveLine}
           onKeyUp={updateActiveLine}
           onFocus={updateActiveLine}
@@ -378,17 +651,23 @@ export function VariableHighlightTextarea({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          className="absolute inset-0 w-full h-full resize-none bg-transparent outline-none border-none"
+          className="absolute inset-0 w-full h-full resize-none bg-transparent outline-none border-none overflow-auto"
           style={{
             color: 'transparent',
             caretColor: 'var(--primary)',
-            padding: '12px',
+            paddingTop: 12,
+            paddingBottom: 12,
+            paddingLeft: gutterWidth + 12,
+            paddingRight: 12,
             fontFamily: 'var(--font-mono)',
             fontSize: FONT_SIZE,
             lineHeight: `${LINE_HEIGHT}px`,
             WebkitTextFillColor: 'transparent',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
           }}
         />
+      </div>
       </div>
     </div>
   )

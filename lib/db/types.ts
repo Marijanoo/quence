@@ -1,11 +1,64 @@
 // Database entity types for Postman Lite
 // These types define the data structures stored in the database
 
+import { generateId } from '@/lib/utils'
+
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS'
 
 export type BodyType = 'none' | 'json' | 'form-data' | 'x-www-form-urlencoded' | 'raw' | 'binary'
 
 export type AuthType = 'none' | 'bearer' | 'basic' | 'api-key'
+
+// ── Socket.IO / WebSocket types ──────────────────────────────────────────────
+
+export type SocketMessageType = 'text' | 'json' | 'binary'
+
+export interface SocketEvent {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+export interface SocketMessage {
+  id: string
+  direction: 'sent' | 'received'
+  event?: string
+  type: SocketMessageType
+  data: string
+  timestamp: number
+  size: number
+}
+
+export type SocketProtocol = 'ws' | 'socketio'
+
+export interface SocketConfig {
+  id: string
+  name: string
+  url: string
+  protocol: SocketProtocol
+  params: KeyValuePair[]
+  headers: KeyValuePair[]
+  auth: AuthConfig
+  events: SocketEvent[]
+  // Message composer state (persisted so it survives tab switches)
+  messageType: SocketMessageType
+  messageEvent: string
+  messageContent: string
+  collectionId?: string
+  folderId?: string
+  order?: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SocketTab {
+  id: string
+  socketId?: string // If saved to a collection
+  config: SocketConfig
+  messages: SocketMessage[]
+  isDirty: boolean
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error'
+}
 
 export interface KeyValuePair {
   id: string
@@ -13,6 +66,8 @@ export interface KeyValuePair {
   value: string
   description?: string
   enabled: boolean
+  type?: 'text' | 'file'
+  fileData?: { name: string; base64: string; mimeType: string }
 }
 
 export interface AuthConfig {
@@ -46,6 +101,7 @@ export interface RequestConfig {
   auth: AuthConfig
   collectionId?: string
   folderId?: string
+  order?: number
   createdAt: number
   updatedAt: number
 }
@@ -63,6 +119,7 @@ export interface Collection {
   description?: string
   folders: Folder[]
   workspaceId?: string
+  order?: number
   createdAt: number
   updatedAt: number
 }
@@ -121,13 +178,15 @@ export interface WorkspaceTab {
 export interface WorkspaceState {
   tabs: WorkspaceTab[]
   activeTabId: string | null
+  socketTabs?: SocketTab[]
+  activeSocketTabId?: string | null
 }
 
 // Factory function to create a new request with defaults
 export function createNewRequest(overrides?: Partial<RequestConfig>): RequestConfig {
   const now = Date.now()
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name: 'New Request',
     method: 'GET',
     url: '',
@@ -150,7 +209,7 @@ export function createNewRequest(overrides?: Partial<RequestConfig>): RequestCon
 export function createNewWorkspace(name: string): Workspace {
   const now = Date.now()
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name,
     createdAt: now,
     updatedAt: now,
@@ -161,7 +220,7 @@ export function createNewWorkspace(name: string): Workspace {
 export function createNewCollection(name: string, workspaceId?: string): Collection {
   const now = Date.now()
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name,
     workspaceId,
     folders: [],
@@ -174,7 +233,7 @@ export function createNewCollection(name: string, workspaceId?: string): Collect
 export function createNewEnvironment(name: string, workspaceId?: string): Environment {
   const now = Date.now()
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name,
     variables: [],
     isActive: false,
@@ -187,9 +246,86 @@ export function createNewEnvironment(name: string, workspaceId?: string): Enviro
 // Factory function to create a new key-value pair
 export function createKeyValuePair(key = '', value = ''): KeyValuePair {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     key,
     value,
     enabled: true,
+  }
+}
+
+// ── Sequence types ────────────────────────────────────────────────────────────
+
+export type SequenceStepStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped'
+
+export type SequenceActionType = 'extract-json'
+
+export interface SequenceAction {
+  type: SequenceActionType
+  jsonKey: string      // dot-notation path e.g. "data.access_token"
+  envVariable: string  // environment variable key to write into
+}
+
+export interface SequenceStep {
+  id: string
+  type: 'request' | 'action'
+  // request step fields
+  requestId?: string
+  name: string
+  method?: HttpMethod
+  url?: string
+  // action step fields
+  action?: SequenceAction
+  order: number
+}
+
+export interface SequenceStepResult {
+  stepId: string
+  status: SequenceStepStatus
+  statusCode?: number
+  statusText?: string
+  duration?: number
+  error?: string
+  extractedValue?: string  // for extract-json actions
+}
+
+export interface Sequence {
+  id: string
+  name: string
+  collectionId?: string
+  steps: SequenceStep[]
+  createdAt: number
+  updatedAt: number
+}
+
+export function createNewSequence(overrides?: Partial<Sequence>): Sequence {
+  const now = Date.now()
+  return {
+    id: generateId(),
+    name: 'New Sequence',
+    steps: [],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
+}
+
+// Factory function to create a new socket config
+export function createNewSocketConfig(overrides?: Partial<SocketConfig>): SocketConfig {
+  const now = Date.now()
+  return {
+    id: generateId(),
+    name: 'New Socket',
+    url: '',
+    protocol: 'ws',
+    params: [],
+    headers: [],
+    auth: { type: 'none' },
+    events: [],
+    messageType: 'text',
+    messageEvent: 'message',
+    messageContent: '',
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
   }
 }

@@ -42,8 +42,8 @@ export function BodyTab({
   const { variables, updateVariable } = useEnvironmentContext()
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 p-4 pb-2 shrink-0">
         <Select value={bodyType} onValueChange={(v) => onTypeChange(v as BodyType)}>
           <SelectTrigger className="w-[200px] bg-secondary border-border">
             <SelectValue />
@@ -66,7 +66,7 @@ export function BodyTab({
                 const parsed = JSON.parse(content)
                 onContentChange(JSON.stringify(parsed, null, 2))
               } catch (e) {
-                // If invalid JSON, we could show a toast, but keeping it silent for now
+                // invalid JSON — keep as-is
               }
             }}
             className="h-9 px-3 gap-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10"
@@ -78,29 +78,35 @@ export function BodyTab({
       </div>
 
       {bodyType === 'none' && (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-sm px-4">
           This request does not have a body.
         </p>
       )}
 
       {(bodyType === 'json' || bodyType === 'raw') && (
-        <VariableHighlightTextarea
-          value={content}
-          onChange={onContentChange}
-          placeholder={bodyType === 'json' ? '{\n  "key": "value"\n}' : 'Raw body content'}
-          variables={variables}
-          onUpdateVariable={updateVariable}
-          language={bodyType === 'json' ? 'json' : 'text'}
-        />
+        <div className="flex-1 min-h-0 px-4 pb-4">
+          <VariableHighlightTextarea
+            value={content}
+            onChange={onContentChange}
+            placeholder={bodyType === 'json' ? '{\n  "key": "value"\n}' : 'Raw body content'}
+            variables={variables}
+            onUpdateVariable={updateVariable}
+            language={bodyType === 'json' ? 'json' : 'text'}
+            className="h-full"
+          />
+        </div>
       )}
 
       {(bodyType === 'form-data' || bodyType === 'x-www-form-urlencoded') && (
-        <KeyValueEditor
-          pairs={formData}
-          onChange={onFormDataChange}
-          keyPlaceholder="Key"
-          valuePlaceholder="Value"
-        />
+        <div className="flex-1 min-h-0 overflow-auto px-4 pb-4">
+          <KeyValueEditor
+            pairs={formData}
+            onChange={onFormDataChange}
+            keyPlaceholder="Key"
+            valuePlaceholder="Value"
+            allowFiles={bodyType === 'form-data'}
+          />
+        </div>
       )}
     </div>
   )

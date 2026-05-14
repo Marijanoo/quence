@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, type ReactNode } from 'react'
+import { generateId } from '@/lib/utils'
 import type { Environment, EnvironmentVariable } from '@/lib/db/types'
 
 interface EnvironmentContextValue {
@@ -48,7 +49,7 @@ export function EnvironmentProvider({
       updatedVariables = [
         ...activeEnvironment.variables,
         {
-          id: crypto.randomUUID(),
+          id: generateId(),
           key,
           value: newValue,
           enabled: true,

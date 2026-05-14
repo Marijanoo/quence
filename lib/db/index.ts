@@ -5,9 +5,11 @@ import type {
   Workspace,
   Collection,
   RequestConfig,
+  SocketConfig,
   HistoryEntry,
   Environment,
   WorkspaceState,
+  Sequence,
 } from './types'
 
 // Database adapter interface - implement this for different backends
@@ -35,6 +37,12 @@ export interface DatabaseAdapter {
   updateRequest(id: string, data: Partial<RequestConfig>): Promise<void>
   deleteRequest(id: string): Promise<void>
 
+  // Socket configs
+  getSocketConfigs(collectionId?: string): Promise<SocketConfig[]>
+  createSocketConfig(config: SocketConfig): Promise<void>
+  updateSocketConfig(id: string, data: Partial<SocketConfig>): Promise<void>
+  deleteSocketConfig(id: string): Promise<void>
+
   // History (optionally filtered by workspace)
   getHistory(workspaceId?: string, limit?: number): Promise<HistoryEntry[]>
   addToHistory(entry: HistoryEntry): Promise<void>
@@ -48,6 +56,12 @@ export interface DatabaseAdapter {
   updateEnvironment(id: string, data: Partial<Environment>): Promise<void>
   deleteEnvironment(id: string): Promise<void>
   setActiveEnvironment(id: string | null, workspaceId?: string): Promise<void>
+
+  // Sequences
+  getSequences(collectionId?: string): Promise<Sequence[]>
+  createSequence(seq: Sequence): Promise<void>
+  updateSequence(id: string, data: Partial<Sequence>): Promise<void>
+  deleteSequence(id: string): Promise<void>
 
   // Tab state per workspace
   getWorkspaceState(workspaceId: string): Promise<WorkspaceState | undefined>

@@ -17,6 +17,10 @@ out/
 dist/
 dist-electron/
 
+# Electron builder cache / temp
+electron-builder-cache/
+app-builder-*
+
 # Environment variables
 .env
 .env*.local
@@ -28,12 +32,19 @@ dist-electron/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
 
 # Editor
 .vscode/
 .idea/
 *.swp
 *.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # Logs
 *.log
@@ -41,6 +52,22 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime / temp
+*.pid
+*.seed
+*.pid.lock
+.tmp/
+tmp/
+
+# Package manager locks (keep one, ignore others)
+yarn.lock
+pnpm-lock.yaml
 
 # TypeScript
 *.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/

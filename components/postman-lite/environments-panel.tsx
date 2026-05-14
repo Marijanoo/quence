@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { generateId } from '@/lib/utils'
 import type { Environment, EnvironmentVariable } from '@/lib/db/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -86,7 +87,7 @@ export function EnvironmentsPanel({
         if (content.name && Array.isArray(content.values)) {
           name = content.name
           variables = content.values.map((v: any) => ({
-            id: crypto.randomUUID(),
+            id: generateId(),
             key: v.key || '',
             value: v.value || '',
             enabled: v.enabled !== false,
@@ -95,7 +96,7 @@ export function EnvironmentsPanel({
         // Handle simple key-value object
         else if (typeof content === 'object' && !Array.isArray(content)) {
           variables = Object.entries(content).map(([key, value]) => ({
-            id: crypto.randomUUID(),
+            id: generateId(),
             key,
             value: String(value),
             enabled: true,
@@ -104,7 +105,7 @@ export function EnvironmentsPanel({
 
         if (variables.length > 0) {
           onImportEnvironment({
-            id: crypto.randomUUID(),
+            id: generateId(),
             name,
             variables,
             isActive: false,
@@ -145,7 +146,7 @@ export function EnvironmentsPanel({
 
   const addVariable = (envId: string, variables: EnvironmentVariable[]) => {
     const newVar: EnvironmentVariable = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       key: '',
       value: '',
       enabled: true,

@@ -1,6 +1,7 @@
 'use client'
 
-import { Plus, Trash2 } from 'lucide-react'
+import { useRef } from 'react'
+import { Plus, Trash2, FileUp, X } from 'lucide-react'
 import type { KeyValuePair } from '@/lib/db/types'
 import { createKeyValuePair } from '@/lib/db/types'
 import { Button } from '@/components/ui/button'
@@ -8,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { VariableHighlightInput } from './variable-highlight-input'
 import { useEnvironmentContext } from './environment-context'
+import { cn } from '@/lib/utils'
 
 interface KeyValueEditorProps {
   pairs: KeyValuePair[]
@@ -16,6 +18,7 @@ interface KeyValueEditorProps {
   keyPlaceholder?: string
   valuePlaceholder?: string
   highlightVariables?: boolean
+  allowFiles?: boolean
 }
 
 export function KeyValueEditor({
@@ -25,8 +28,10 @@ export function KeyValueEditor({
   keyPlaceholder = 'Key',
   valuePlaceholder = 'Value',
   highlightVariables = true,
+  allowFiles = false,
 }: KeyValueEditorProps) {
   const { variables, updateVariable } = useEnvironmentContext()
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const handleAdd = () => {
     onChange([...pairs, createKeyValuePair()])
@@ -36,10 +41,29 @@ export function KeyValueEditor({
     onChange(pairs.filter((p) => p.id !== id))
   }
 
-  const handleUpdate = (id: string, field: keyof KeyValuePair, value: string | boolean) => {
-    onChange(
-      pairs.map((p) => (p.id === id ? { ...p, [field]: value } : p))
-    )
+  const handleUpdate = (id: string, field: keyof KeyValuePair, value: unknown) => {
+    onChange(pairs.map((p) => (p.id === id ? { ...p, [field]: value } : p)))
+  }
+
+  const handleFileChange = (id: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1]
+      onChange(pairs.map(p => p.id === id ? {
+        ...p,
+        value: file.name,
+        fileData: { name: file.name, base64, mimeType: file.type || 'application/octet-stream' },
+      } : p))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleClearFile = (id: string) => {
+    onChange(pairs.map(p => p.id === id ? { ...p, value: '', fileData: undefined } : p))
+    const ref = fileInputRefs.current[id]
+    if (ref) ref.value = ''
   }
 
   return (
@@ -47,6 +71,7 @@ export function KeyValueEditor({
       {/* Header */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium px-1">
         <div className="w-6" />
+        {allowFiles && <div className="w-16" />}
         <div className="flex-1">{keyPlaceholder}</div>
         <div className="flex-1">{valuePlaceholder}</div>
         {showDescription && <div className="flex-1">Description</div>}
@@ -54,16 +79,43 @@ export function KeyValueEditor({
       </div>
 
       {/* Pairs */}
-      {pairs.map((pair) => (
-        <div key={pair.id} className="flex items-center gap-2">
-          <Checkbox
-            checked={pair.enabled}
-            onCheckedChange={(checked) => handleUpdate(pair.id, 'enabled', !!checked)}
-            className="border-border"
-          />
-          {highlightVariables ? (
-            <>
-              <div className="flex-1">
+      {pairs.map((pair) => {
+        const isFile = allowFiles && pair.type === 'file'
+        return (
+          <div key={pair.id} className="flex items-center gap-2">
+            <Checkbox
+              checked={pair.enabled}
+              onCheckedChange={(checked) => handleUpdate(pair.id, 'enabled', !!checked)}
+              className="border-border"
+            />
+
+            {/* Type toggle */}
+            {allowFiles && (
+              <div className="flex rounded border border-border overflow-hidden shrink-0">
+                <button
+                  onClick={() => handleUpdate(pair.id, 'type', 'text')}
+                  className={cn(
+                    'px-2 py-1 text-xs transition-colors',
+                    !isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  )}
+                >
+                  Text
+                </button>
+                <button
+                  onClick={() => handleUpdate(pair.id, 'type', 'file')}
+                  className={cn(
+                    'px-2 py-1 text-xs transition-colors',
+                    isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  )}
+                >
+                  File
+                </button>
+              </div>
+            )}
+
+            {/* Key */}
+            <div className="flex-1">
+              {highlightVariables ? (
                 <VariableHighlightInput
                   value={pair.key}
                   onChange={(v) => handleUpdate(pair.id, 'key', v)}
@@ -72,8 +124,46 @@ export function KeyValueEditor({
                   variables={variables}
                   onUpdateVariable={updateVariable}
                 />
-              </div>
-              <div className="flex-1">
+              ) : (
+                <Input
+                  value={pair.key}
+                  onChange={(e) => handleUpdate(pair.id, 'key', e.target.value)}
+                  placeholder={keyPlaceholder}
+                  className="h-8 bg-secondary border-border text-sm font-mono"
+                />
+              )}
+            </div>
+
+            {/* Value or file picker */}
+            <div className="flex-1">
+              {isFile ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    ref={el => { fileInputRefs.current[pair.id] = el }}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(pair.id, e)}
+                  />
+                  {pair.fileData ? (
+                    <div className="flex items-center gap-1 flex-1 h-8 px-2 rounded border border-border bg-secondary text-xs text-foreground overflow-hidden">
+                      <span className="truncate flex-1">{pair.fileData.name}</span>
+                      <button onClick={() => handleClearFile(pair.id)} className="shrink-0 text-muted-foreground hover:text-destructive">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 flex-1 text-xs text-muted-foreground border-border bg-secondary hover:text-foreground"
+                      onClick={() => fileInputRefs.current[pair.id]?.click()}
+                    >
+                      <FileUp className="h-3.5 w-3.5 mr-1" />
+                      Choose file
+                    </Button>
+                  )}
+                </div>
+              ) : highlightVariables ? (
                 <VariableHighlightInput
                   value={pair.value}
                   onChange={(v) => handleUpdate(pair.id, 'value', v)}
@@ -82,44 +172,36 @@ export function KeyValueEditor({
                   variables={variables}
                   onUpdateVariable={updateVariable}
                 />
-              </div>
-            </>
-          ) : (
-            <>
-              <Input
-                value={pair.key}
-                onChange={(e) => handleUpdate(pair.id, 'key', e.target.value)}
-                placeholder={keyPlaceholder}
-                className="flex-1 h-8 bg-secondary border-border text-sm font-mono"
-              />
-              <Input
-                value={pair.value}
-                onChange={(e) => handleUpdate(pair.id, 'value', e.target.value)}
-                placeholder={valuePlaceholder}
-                className="flex-1 h-8 bg-secondary border-border text-sm font-mono"
-              />
-            </>
-          )}
-          {showDescription && (
-            <Input
-              value={pair.description || ''}
-              onChange={(e) => handleUpdate(pair.id, 'description', e.target.value)}
-              placeholder="Description"
-              className="flex-1 h-8 bg-secondary border-border text-sm"
-            />
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleRemove(pair.id)}
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
-      ))}
+              ) : (
+                <Input
+                  value={pair.value}
+                  onChange={(e) => handleUpdate(pair.id, 'value', e.target.value)}
+                  placeholder={valuePlaceholder}
+                  className="h-8 bg-secondary border-border text-sm font-mono"
+                />
+              )}
+            </div>
 
-      {/* Add button */}
+            {showDescription && (
+              <Input
+                value={pair.description || ''}
+                onChange={(e) => handleUpdate(pair.id, 'description', e.target.value)}
+                placeholder="Description"
+                className="flex-1 h-8 bg-secondary border-border text-sm"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleRemove(pair.id)}
+              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        )
+      })}
+
       <Button
         variant="ghost"
         size="sm"
