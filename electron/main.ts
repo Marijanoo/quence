@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import * as path from 'path'
 import serve from 'electron-serve'
+import WebSocket from 'ws'
+import { io as ioClient } from 'socket.io-client'
 
 const isProd = process.env.NODE_ENV === 'production'
 
@@ -81,6 +83,111 @@ app.on('ready', () => {
   })
   ipcMain.on('window-close', () => mainWindow?.close())
 
+  // ── WebSocket proxy ─────────────────────────────────────────────────────────
+  type SocketHandle = { send: (data: string) => void; close: () => void }
+  const sockets = new Map<string, SocketHandle>()
+
+  ipcMain.on('ws-connect', (event, { socketId, url, headers, protocol }: { socketId: string; url: string; headers?: Record<string, string>; protocol?: string }) => {
+    if (sockets.has(socketId)) return
+    // Capture sender once — event.sender can go stale after the handler returns
+    const sender = event.sender
+
+    if (protocol === 'socketio') {
+      // Socket.IO: use socket.io-client so the EIO handshake and polling→ws upgrade work correctly
+      const socket = ioClient(url, {
+        transports: ['polling', 'websocket'],
+        extraHeaders: headers ?? {},
+        reconnection: false,
+        ackTimeout: 30000,
+      })
+      sockets.set(socketId, {
+        send: (data: string) => {
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed?.__ack === true) {
+              socket.emit(parsed.event, parsed.data, (...ackArgs: any[]) => {
+                const ackData = ackArgs.length === 1 ? ackArgs[0] : ackArgs
+                const payload = typeof ackData === 'string' ? ackData : JSON.stringify(ackData)
+                sender.send('ws-message', { socketId, data: JSON.stringify(['__ack__', payload]), isBinary: false })
+              })
+              return
+            }
+            if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
+              const [eventName, ...args] = parsed
+              socket.emit(eventName, ...args)
+              return
+            }
+          } catch { /* */ }
+          socket.emit('message', data)
+        },
+        close: () => socket.disconnect(),
+      })
+
+      socket.on('connect', () => sender.send('ws-open', { socketId }))
+
+      socket.onAny((eventName: string, ...args: any[]) => {
+        const data = JSON.stringify([eventName, ...args])
+        sender.send('ws-message', { socketId, data, isBinary: false })
+      })
+
+      socket.on('disconnect', (reason: string) => {
+        sockets.delete(socketId)
+        sender.send('ws-close', { socketId, code: 1000, reason })
+      })
+
+      socket.on('connect_error', (err: Error) => {
+        sockets.delete(socketId)
+        sender.send('ws-error', { socketId, message: err.message })
+        socket.disconnect()
+      })
+    } else {
+      // Raw WebSocket
+      let origin = ''
+      let host = ''
+      try {
+        const u = new URL(url.replace(/^wss?:\/\//, 'https://'))
+        origin = u.origin
+        host = u.host
+      } catch { /* */ }
+      const mergedHeaders = { Host: host, Origin: origin, ...headers }
+      const ws = new WebSocket(url, { headers: mergedHeaders, perMessageDeflate: false })
+      sockets.set(socketId, { send: (data) => ws.send(data), close: () => ws.close() })
+
+      ws.on('open', () => sender.send('ws-open', { socketId }))
+      ws.on('message', (data) => {
+        const text = Buffer.isBuffer(data) ? data.toString('base64') : data.toString()
+        const isBinary = Buffer.isBuffer(data)
+        sender.send('ws-message', { socketId, data: text, isBinary })
+      })
+      ws.on('close', (code, reason) => {
+        sockets.delete(socketId)
+        sender.send('ws-close', { socketId, code, reason: reason.toString() })
+      })
+      ws.on('unexpected-response', (_req, res) => {
+        let body = ''
+        res.on('data', (chunk: Buffer) => { body += chunk.toString() })
+        res.on('end', () => {
+          const msg = `Unexpected server response: ${res.statusCode} ${res.statusMessage}\nHeaders: ${JSON.stringify(res.headers, null, 2)}\nBody: ${body}`
+          console.error('[ws-connect unexpected-response]', msg)
+          sender.send('ws-error', { socketId, message: msg })
+        })
+      })
+      ws.on('error', (err) => {
+        console.error('[ws-connect error]', err)
+        sender.send('ws-error', { socketId, message: err.message })
+      })
+    }
+  })
+
+  ipcMain.on('ws-send', (_event, { socketId, data }: { socketId: string; data: string }) => {
+    sockets.get(socketId)?.send(data)
+  })
+
+  ipcMain.on('ws-disconnect', (_event, { socketId }: { socketId: string }) => {
+    sockets.get(socketId)?.close()
+    sockets.delete(socketId)
+  })
+
   ipcMain.handle('make-request', async (_event, options) => {
     try {
       const { url, method, headers, requestBody } = options
@@ -96,7 +203,7 @@ app.on('ready', () => {
       // Build headers object, filtering out certain headers
       const fetchHeaders: Record<string, string> = {}
       const skipHeaders = ['host', 'connection', 'content-length', 'transfer-encoding']
-      
+
       if (headers) {
         for (const [key, value] of Object.entries(headers)) {
           if (!skipHeaders.includes(key.toLowerCase()) && typeof value === 'string') {
@@ -133,11 +240,11 @@ app.on('ready', () => {
 
       // Get response body
       const contentType = response.headers.get('content-type') || 'text/plain'
-      const isBinary = contentType.includes('image/') || 
-                       contentType.includes('application/pdf') || 
-                       contentType.includes('audio/') || 
-                       contentType.includes('video/') ||
-                       contentType.includes('application/octet-stream')
+      const isBinary = contentType.includes('image/') ||
+        contentType.includes('application/pdf') ||
+        contentType.includes('audio/') ||
+        contentType.includes('video/') ||
+        contentType.includes('application/octet-stream')
 
       let responseBody: string
       let size: number
@@ -148,7 +255,7 @@ app.on('ready', () => {
         size = buffer.byteLength
       } else {
         responseBody = await response.text()
-        
+
         // Prettify JSON if needed
         if (contentType.includes('application/json')) {
           try {
@@ -158,7 +265,7 @@ app.on('ready', () => {
             // Keep original text if JSON parse fails
           }
         }
-        
+
         size = new TextEncoder().encode(responseBody).length
       }
 
@@ -181,7 +288,7 @@ app.on('ready', () => {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-      
+
       return {
         status: 0,
         statusText: 'Network Error',

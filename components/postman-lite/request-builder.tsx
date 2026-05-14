@@ -12,25 +12,32 @@ interface RequestBuilderProps {
   request: RequestConfig
   onUpdate: (updates: Partial<RequestConfig>) => void
   onSend: () => void
+  onCancel?: () => void
   isLoading: boolean
+  hideUrlBar?: boolean
 }
 
 export function RequestBuilder({
   request,
   onUpdate,
   onSend,
+  onCancel,
   isLoading,
+  hideUrlBar,
 }: RequestBuilderProps) {
   return (
     <div className="flex flex-col h-full">
-      <UrlBar
-        method={request.method}
-        url={request.url}
-        onMethodChange={(method: HttpMethod) => onUpdate({ method })}
-        onUrlChange={(url) => onUpdate({ url })}
-        onSend={onSend}
-        isLoading={isLoading}
-      />
+      {!hideUrlBar && (
+        <UrlBar
+          request={request}
+          onMethodChange={(method: HttpMethod) => onUpdate({ method })}
+          onUrlChange={(url) => onUpdate({ url })}
+          onCurlImport={onUpdate}
+          onSend={onSend}
+          onCancel={onCancel ?? (() => {})}
+          isLoading={isLoading}
+        />
+      )}
 
       <Tabs defaultValue="params" className="flex-1 flex flex-col min-h-0">
         <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0">

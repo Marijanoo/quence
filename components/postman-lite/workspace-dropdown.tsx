@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen } from 'lucide-react'
+import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload } from 'lucide-react'
 import type { Workspace } from '@/lib/db/types'
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   onCreate: (name: string) => void
   onRename: (id: string, name: string) => void
   onDelete: (id: string) => void
+  onExport: (id: string) => void
+  onImport: () => void
 }
 
 export function WorkspaceDropdown({
@@ -20,6 +22,8 @@ export function WorkspaceDropdown({
   onCreate,
   onRename,
   onDelete,
+  onExport,
+  onImport,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState('')
@@ -148,6 +152,13 @@ export function WorkspaceDropdown({
                 {renamingId !== ws.id && (
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                     <button
+                      onClick={e => { e.stopPropagation(); onExport(ws.id) }}
+                      className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                      title="Export workspace"
+                    >
+                      <Download className="h-3 w-3" />
+                    </button>
+                    <button
                       onClick={e => startRename(ws, e)}
                       className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                       title="Rename"
@@ -168,7 +179,7 @@ export function WorkspaceDropdown({
             ))}
           </div>
 
-          {/* Create new workspace */}
+          {/* Create / import workspace */}
           <div className="border-t border-border py-1">
             {isCreating ? (
               <div className="flex items-center gap-2 px-3 py-2">
@@ -187,13 +198,22 @@ export function WorkspaceDropdown({
                 />
               </div>
             ) : (
-              <button
-                onClick={() => setIsCreating(true)}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                New Workspace
-              </button>
+              <>
+                <button
+                  onClick={() => setIsCreating(true)}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Workspace
+                </button>
+                <button
+                  onClick={() => { setOpen(false); onImport() }}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import Workspace
+                </button>
+              </>
             )}
           </div>
         </div>

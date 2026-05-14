@@ -1,6 +1,6 @@
 'use client'
 
-import type { Collection, RequestConfig, HistoryEntry, Environment } from '@/lib/db/types'
+import type { Collection, RequestConfig, SocketConfig, HistoryEntry, Environment } from '@/lib/db/types'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CollectionsPanel } from './collections-panel'
 import { HistoryPanel } from './history-panel'
@@ -16,10 +16,16 @@ interface SidebarProps {
   onCreateCollection: (name: string) => void
   onDeleteCollection: (id: string) => void
   onRenameCollection: (id: string, name: string) => void
+  onReorderCollections: (ordered: Collection[]) => void
+  onReorderRequests: (ordered: RequestConfig[]) => void
   onOpenRequest: (request: RequestConfig) => void
   onDeleteRequest: (id: string) => void
   onSaveRequest: (request: RequestConfig, collectionId: string) => void
-  onImportCollection: (collection: Collection, requests: RequestConfig[]) => void
+  onImportCollection: (collection: Collection, requests: RequestConfig[], socketConfigs?: SocketConfig[]) => void
+  socketConfigs?: SocketConfig[]
+  onOpenSocketConfig?: (config: SocketConfig) => void
+  onDeleteSocketConfig?: (id: string) => void
+  sequenceDragMode?: boolean
   onOpenHistoryEntry: (entry: HistoryEntry) => void
   onDeleteHistoryEntry: (id: string) => void
   onClearHistory: () => void
@@ -39,10 +45,16 @@ export function Sidebar({
   onCreateCollection,
   onDeleteCollection,
   onRenameCollection,
+  onReorderCollections,
+  onReorderRequests,
   onOpenRequest,
   onDeleteRequest,
   onSaveRequest,
   onImportCollection,
+  socketConfigs,
+  onOpenSocketConfig,
+  onDeleteSocketConfig,
+  sequenceDragMode,
   onOpenHistoryEntry,
   onDeleteHistoryEntry,
   onClearHistory,
@@ -75,17 +87,23 @@ export function Sidebar({
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="collections" className="flex-1 m-0 overflow-hidden">
+      <TabsContent value="collections" forceMount className="flex-1 m-0 overflow-hidden data-[state=inactive]:hidden">
         <CollectionsPanel
           collections={collections}
           requests={requests}
           onCreateCollection={onCreateCollection}
           onDeleteCollection={onDeleteCollection}
           onRenameCollection={onRenameCollection}
+          onReorderCollections={onReorderCollections}
+          onReorderRequests={onReorderRequests}
           onOpenRequest={onOpenRequest}
           onDeleteRequest={onDeleteRequest}
           onSaveRequest={onSaveRequest}
+          socketConfigs={socketConfigs}
           onImportCollection={onImportCollection}
+          onOpenSocketConfig={onOpenSocketConfig}
+          onDeleteSocketConfig={onDeleteSocketConfig}
+          sequenceDragMode={sequenceDragMode}
         />
       </TabsContent>
 
