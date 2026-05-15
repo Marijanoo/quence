@@ -25,7 +25,13 @@
   --input: oklch(0.2 0.01 260);
   --ring: oklch(0.72 0.19 160);
   --radius: 0.5rem;
-  
+
+  /* JSON syntax colors (overridden by settings panel) */
+  --json-key:     oklch(0.70 0.12 280);
+  --json-string:  oklch(0.75 0.15 160);
+  --json-number:  oklch(0.75 0.15 55);
+  --json-boolean: oklch(0.72 0.19 160);
+
   /* Method badge colors */
   --method-get: oklch(0.72 0.19 160);
   --method-post: oklch(0.75 0.18 80);
@@ -60,8 +66,8 @@
 }
 
 @theme inline {
-  --font-sans: 'Geist', 'Geist Fallback';
-  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -136,12 +142,12 @@
   tab-size: 2;
 }
 
-.code-editor .key { color: var(--primary); font-weight: 500; }
-.code-editor .string { color: oklch(0.8 0.12 150); }   /* Soft green */
-.code-editor .number { color: oklch(0.8 0.15 80); }    /* Warm yellow */
-.code-editor .boolean { color: oklch(0.75 0.18 280); } /* Vibrant violet */
-.code-editor .null { color: oklch(0.65 0.05 260); }    /* Subdued blue-grey */
-.code-editor .punctuation { color: var(--foreground); opacity: 0.6; }
+.code-editor .key { color: var(--json-key); }
+.code-editor .string { color: var(--json-string); }
+.code-editor .number { color: var(--json-number); }
+.code-editor .boolean { color: var(--json-boolean); }
+.code-editor .null { color: var(--muted-foreground); }
+.code-editor .punctuation { color: var(--muted-foreground); }
 
 mark.search-match {
   background: oklch(0.75 0.18 80 / 0.35);

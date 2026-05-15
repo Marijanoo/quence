@@ -16,6 +16,8 @@ interface RequestBuilderProps {
   isLoading: boolean
   hideUrlBar?: boolean
   readOnly?: boolean
+  activeRequestTab?: string
+  onRequestTabChange?: (tab: string) => void
 }
 
 export function RequestBuilder({
@@ -26,6 +28,8 @@ export function RequestBuilder({
   isLoading,
   hideUrlBar,
   readOnly,
+  activeRequestTab,
+  onRequestTabChange,
 }: RequestBuilderProps) {
   return (
     <div className="flex flex-col h-full">
@@ -43,7 +47,7 @@ export function RequestBuilder({
       )}
 
       <div className="flex-1 flex flex-col min-h-0">
-        <Tabs defaultValue="params" className="flex-1 flex flex-col min-h-0">
+        <Tabs value={activeRequestTab ?? 'params'} onValueChange={onRequestTabChange} className="flex-1 flex flex-col min-h-0">
           <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0">
             <TabsTrigger
               value="params"

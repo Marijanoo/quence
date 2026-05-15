@@ -2,12 +2,189 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { SearchBar } from './search-bar'
+import { computeFoldRanges, computeHiddenLines, foldSummary } from '@/lib/json-fold'
 
 interface CodeViewerProps {
   data: string
   language?: 'json' | 'html' | 'auto'
   className?: string
 }
+
+// ── JSON token types ──────────────────────────────────────────────────────────
+
+type Token = { type: 'key' | 'string' | 'number' | 'boolean' | 'null' | 'punctuation' | 'plain'; text: string }
+
+function tokenizeLine(line: string): Token[] {
+  // Split on JSON tokens, keeping delimiters
+  const parts = line.split(/("(?:[^"\\]|\\.)*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[:,{}\[\]])/g)
+  const tokens: Token[] = []
+  for (let i = 0; i < parts.length; i++) {
+    const t = parts[i]
+    if (!t) continue
+    if (t.startsWith('"')) {
+      let j = i + 1
+      while (j < parts.length && parts[j].trim() === '') j++
+      const nextToken = parts[j] ?? ''
+      tokens.push({ type: nextToken === ':' ? 'key' : 'string', text: t })
+    } else if (/^-?\d/.test(t)) {
+      tokens.push({ type: 'number', text: t })
+    } else if (t === 'true' || t === 'false') {
+      tokens.push({ type: 'boolean', text: t })
+    } else if (t === 'null') {
+      tokens.push({ type: 'null', text: t })
+    } else if (/^[:,{}\[\]]$/.test(t)) {
+      tokens.push({ type: 'punctuation', text: t })
+    } else {
+      tokens.push({ type: 'plain', text: t })
+    }
+  }
+  return tokens
+}
+
+function TokenSpan({ token }: { token: Token }) {
+  const style: React.CSSProperties = {}
+  if (token.type === 'key') style.color = 'var(--json-key)'
+  else if (token.type === 'string') style.color = 'var(--json-string)'
+  else if (token.type === 'number') style.color = 'var(--json-number)'
+  else if (token.type === 'boolean') style.color = 'var(--json-boolean)'
+  else if (token.type === 'null' || token.type === 'punctuation') style.color = 'var(--muted-foreground)'
+  return <span style={style}>{token.text}</span>
+}
+
+function highlightLineWithSearch(line: string, query: string, matchOffset: number, activeMatch: number): React.ReactNode {
+  if (!query) {
+    const tokens = tokenizeLine(line)
+    return <>{tokens.map((t, i) => <TokenSpan key={i} token={t} />)}</>
+  }
+  // With search: highlight matches on top of syntax coloring
+  const q = query.toLowerCase()
+  const lower = line.toLowerCase()
+  const nodes: React.ReactNode[] = []
+  let pos = 0
+  let idx = matchOffset
+  while (pos < line.length) {
+    const found = lower.indexOf(q, pos)
+    if (found === -1) {
+      const seg = line.slice(pos)
+      const tokens = tokenizeLine(seg)
+      tokens.forEach((t, i) => nodes.push(<TokenSpan key={`${pos}-${i}`} token={t} />))
+      break
+    }
+    if (found > pos) {
+      const seg = line.slice(pos, found)
+      const tokens = tokenizeLine(seg)
+      tokens.forEach((t, i) => nodes.push(<TokenSpan key={`${pos}-${i}`} token={t} />))
+    }
+    const isActive = idx === activeMatch
+    nodes.push(
+      <mark key={found} className={isActive ? 'bg-primary text-primary-foreground rounded-[2px]' : 'bg-primary/30 text-foreground rounded-[2px]'}>
+        {line.slice(found, found + query.length)}
+      </mark>
+    )
+    idx++
+    pos = found + query.length
+  }
+  return <>{nodes}</>
+}
+
+function countMatches(text: string, query: string): number {
+  if (!query) return 0
+  let count = 0, pos = 0
+  const lower = text.toLowerCase(), q = query.toLowerCase()
+  while ((pos = lower.indexOf(q, pos)) !== -1) { count++; pos += q.length }
+  return count
+}
+
+// ── HTML viewer (unchanged dangerouslySetInnerHTML) ───────────────────────────
+
+function HtmlViewer({ data }: { data: string }) {
+  const highlighted = useMemo(() => highlightHtml(data), [data])
+  return (
+    <pre className="code-editor whitespace-pre-wrap break-all">
+      <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+    </pre>
+  )
+}
+
+// ── JSON viewer with folding ───────────────────────────────────────────────────
+
+function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
+  data: string
+  query: string
+  activeMatch: number
+  activeMatchRef: React.RefObject<HTMLElement | null>
+}) {
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+
+  const lines = useMemo(() => {
+    try { return JSON.stringify(JSON.parse(data), null, 2).split('\n') }
+    catch { return data.split('\n') }
+  }, [data])
+
+  useEffect(() => { setCollapsed(new Set()) }, [data])
+
+  const foldRanges = useMemo(() => computeFoldRanges(lines), [lines])
+  const hiddenLines = useMemo(() => computeHiddenLines(collapsed, foldRanges, lines.length), [collapsed, foldRanges, lines.length])
+
+  const lineOffsets = useMemo(() => {
+    const offsets: number[] = []
+    let cum = 0
+    for (let i = 0; i < lines.length; i++) {
+      offsets.push(cum)
+      if (!hiddenLines.has(i)) cum += countMatches(lines[i], query)
+    }
+    return offsets
+  }, [lines, hiddenLines, query])
+
+  const toggleFold = useCallback((i: number) => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i); else next.add(i)
+      return next
+    })
+  }, [])
+
+  return (
+    <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
+      {lines.map((line, i) => {
+        if (hiddenLines.has(i)) return null
+        const offset = lineOffsets[i] ?? 0
+        const count = countMatches(line, query)
+        const localActive = activeMatch - offset
+        const hasActive = !!query && localActive >= 0 && localActive < count
+        const isFoldable = foldRanges.has(i)
+        const isCollapsed = collapsed.has(i)
+        const closer = foldRanges.get(i)
+        const displayLine = isCollapsed && closer !== undefined
+          ? foldSummary(line, lines[closer], closer - i - 1)
+          : line
+
+        return (
+          <div
+            key={i}
+            ref={hasActive ? (el => { (activeMatchRef as React.MutableRefObject<HTMLElement | null>).current = el }) : undefined}
+            className="flex items-start"
+          >
+            <span
+              className={`inline-block w-4 shrink-0 text-center select-none mr-1 ${isFoldable ? 'text-muted-foreground hover:text-foreground cursor-pointer' : 'cursor-default'}`}
+              onClick={isFoldable ? () => toggleFold(i) : undefined}
+            >
+              {isFoldable ? (isCollapsed ? '▶' : '▼') : ''}
+            </span>
+            <span
+              className={isCollapsed ? 'flex-1 cursor-pointer' : 'flex-1'}
+              onClick={isCollapsed ? () => toggleFold(i) : undefined}
+            >
+              {highlightLineWithSearch(displayLine, query, offset, activeMatch)}
+            </span>
+          </div>
+        )
+      })}
+    </pre>
+  )
+}
+
+// ── Main CodeViewer ───────────────────────────────────────────────────────────
 
 export function CodeViewer({ data, language = 'auto', className }: CodeViewerProps) {
   const [searchOpen, setSearchOpen] = useState(false)
@@ -16,99 +193,44 @@ export function CodeViewer({ data, language = 'auto', className }: CodeViewerPro
   const containerRef = useRef<HTMLDivElement>(null)
   const activeMatchRef = useRef<HTMLElement | null>(null)
 
-  const highlighted = useMemo(() => {
-    let mode = language
-    if (mode === 'auto') {
-      const trimmed = data.trimStart()
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        mode = 'json'
-      } else if (trimmed.startsWith('<')) {
-        mode = 'html'
-      } else {
-        mode = 'json'
-      }
-    }
-
-    try {
-      if (mode === 'json') {
-        try {
-          const parsed = JSON.parse(data)
-          return highlightJson(JSON.stringify(parsed, null, 2))
-        } catch {
-          return highlightJson(data)
-        }
-      } else {
-        return highlightHtml(data)
-      }
-    } catch {
-      return escapeHtml(data)
-    }
+  const isJson = useMemo(() => {
+    if (language === 'json') return true
+    if (language === 'html') return false
+    const trimmed = data.trimStart()
+    return trimmed.startsWith('{') || trimmed.startsWith('[')
   }, [data, language])
 
-  // Count occurrences of query in the plain text
   const matchCount = useMemo(() => {
-    if (!query) return 0
-    const lower = data.toLowerCase()
-    const q = query.toLowerCase()
-    let count = 0
-    let idx = 0
-    while ((idx = lower.indexOf(q, idx)) !== -1) { count++; idx += q.length }
-    return count
-  }, [data, query])
+    if (!query || !isJson) return 0
+    try {
+      const formatted = JSON.stringify(JSON.parse(data), null, 2)
+      return countMatches(formatted, query)
+    } catch {
+      return countMatches(data, query)
+    }
+  }, [data, query, isJson])
 
-  // Clamp currentMatch when matchCount changes
   useEffect(() => {
     if (matchCount === 0) setCurrentMatch(0)
     else setCurrentMatch(prev => Math.min(prev, matchCount - 1))
   }, [matchCount])
 
-  // Build highlighted HTML with search marks
-  const displayHtml = useMemo(() => {
-    if (!query || matchCount === 0) return highlighted
-
-    // We operate on the already-syntax-highlighted HTML string and wrap plain-text matches.
-    // Strategy: collect match positions in the raw `data`, then map them into the HTML.
-    // Simpler: strip tags to find positions, then inject <mark> tags carefully.
-    // Because the HTML has entity-encoded content we use a DOM-free approach:
-    // we walk the highlighted HTML and inject marks around text nodes only.
-    return injectSearchMarks(highlighted, query, currentMatch)
-  }, [highlighted, query, currentMatch, matchCount])
-
-  // Scroll active mark into view
   useEffect(() => {
     if (!searchOpen || !query) return
-    const el = containerRef.current?.querySelector<HTMLElement>('.search-match-active')
-    if (el) {
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      activeMatchRef.current = el
-    }
-  }, [displayHtml, searchOpen, query])
+    activeMatchRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [currentMatch, searchOpen, query])
 
-  const openSearch = useCallback(() => { setSearchOpen(true) }, [])
+  const openSearch = useCallback(() => setSearchOpen(true), [])
   const closeSearch = useCallback(() => { setSearchOpen(false); setQuery(''); setCurrentMatch(0) }, [])
-
-  const handleNext = useCallback(() => {
-    setCurrentMatch(prev => (prev + 1) % (matchCount || 1))
-  }, [matchCount])
-
-  const handlePrev = useCallback(() => {
-    setCurrentMatch(prev => (prev - 1 + (matchCount || 1)) % (matchCount || 1))
-  }, [matchCount])
+  const handleNext = useCallback(() => setCurrentMatch(prev => (prev + 1) % (matchCount || 1)), [matchCount])
+  const handlePrev = useCallback(() => setCurrentMatch(prev => (prev - 1 + (matchCount || 1)) % (matchCount || 1)), [matchCount])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-      e.preventDefault()
-      openSearch()
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); openSearch() }
   }, [openSearch])
 
   return (
-    <div
-      ref={containerRef}
-      className={`relative outline-none ${className || ''}`}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-    >
+    <div ref={containerRef} className={`relative outline-none ${className || ''}`} tabIndex={0} onKeyDown={handleKeyDown}>
       {searchOpen && (
         <div className="sticky top-0 z-10">
           <SearchBar
@@ -122,158 +244,18 @@ export function CodeViewer({ data, language = 'auto', className }: CodeViewerPro
           />
         </div>
       )}
-      <pre className={`code-editor whitespace-pre-wrap break-all`}>
-        <code dangerouslySetInnerHTML={{ __html: displayHtml }} />
-      </pre>
+      {isJson ? (
+        <div className="p-4">
+          <JsonViewer data={data} query={searchOpen ? query : ''} activeMatch={currentMatch} activeMatchRef={activeMatchRef} />
+        </div>
+      ) : (
+        <HtmlViewer data={data} />
+      )}
     </div>
   )
 }
 
-// ── Search mark injection ─────────────────────────────────────────────────────
-
-function injectSearchMarks(html: string, query: string, activeIndex: number): string {
-  const q = query.toLowerCase()
-  let matchIndex = 0
-  let result = ''
-  let i = 0
-
-  while (i < html.length) {
-    if (html[i] === '<') {
-      // Skip HTML tag
-      const end = html.indexOf('>', i)
-      if (end === -1) { result += html.slice(i); break }
-      result += html.slice(i, end + 1)
-      i = end + 1
-      continue
-    }
-
-    if (html[i] === '&') {
-      // HTML entity — treat as one logical character
-      const semi = html.indexOf(';', i)
-      if (semi === -1) { result += html[i]; i++; continue }
-      const entity = html.slice(i, semi + 1)
-      // decode single char for matching
-      const decoded = decodeEntity(entity)
-      if (decoded.toLowerCase() === q[0] && matchesAtEntity(html, i, q)) {
-        // Find full entity span for the match
-        const { htmlSpan, nextI } = consumeEntityMatch(html, i, q.length)
-        const cls = matchIndex === activeIndex ? 'search-match-active' : 'search-match'
-        result += `<mark class="${cls}">${htmlSpan}</mark>`
-        matchIndex++
-        i = nextI
-      } else {
-        result += entity
-        i = semi + 1
-      }
-      continue
-    }
-
-    // Plain character
-    const lower = getDecodedChar(html, i).toLowerCase()
-    if (lower === q[0] && matchesAtPlain(html, i, q)) {
-      const { htmlSpan, nextI } = consumePlainMatch(html, i, q.length)
-      const cls = matchIndex === activeIndex ? 'search-match-active' : 'search-match'
-      result += `<mark class="${cls}">${htmlSpan}</mark>`
-      matchIndex++
-      i = nextI
-    } else {
-      result += html[i]
-      i++
-    }
-  }
-
-  return result
-}
-
-// Match query against HTML at position i, skipping tags, decoding entities
-function matchesAtPlain(html: string, start: number, query: string): boolean {
-  const chars = extractLogicalChars(html, start, query.length)
-  return chars.toLowerCase() === query.toLowerCase()
-}
-
-function matchesAtEntity(html: string, start: number, query: string): boolean {
-  const chars = extractLogicalChars(html, start, query.length)
-  return chars.toLowerCase() === query.toLowerCase()
-}
-
-// Extract `count` logical (decoded) characters starting at html[pos], skipping tags
-function extractLogicalChars(html: string, pos: number, count: number): string {
-  let result = ''
-  let i = pos
-  while (result.length < count && i < html.length) {
-    if (html[i] === '<') {
-      const end = html.indexOf('>', i)
-      if (end === -1) break
-      i = end + 1
-      continue
-    }
-    if (html[i] === '&') {
-      const semi = html.indexOf(';', i)
-      if (semi === -1) { result += html[i]; i++; continue }
-      result += decodeEntity(html.slice(i, semi + 1))
-      i = semi + 1
-      continue
-    }
-    result += html[i]
-    i++
-  }
-  return result
-}
-
-function getDecodedChar(html: string, i: number): string {
-  return html[i]
-}
-
-// Consume `count` logical characters from html[start], returning the HTML span and next position
-function consumePlainMatch(html: string, start: number, count: number): { htmlSpan: string; nextI: number } {
-  let consumed = 0
-  let i = start
-  let htmlSpan = ''
-  while (consumed < count && i < html.length) {
-    if (html[i] === '<') {
-      const end = html.indexOf('>', i)
-      if (end === -1) break
-      htmlSpan += html.slice(i, end + 1)
-      i = end + 1
-      continue
-    }
-    if (html[i] === '&') {
-      const semi = html.indexOf(';', i)
-      if (semi === -1) { htmlSpan += html[i]; i++; consumed++; continue }
-      htmlSpan += html.slice(i, semi + 1)
-      i = semi + 1
-      consumed++
-      continue
-    }
-    htmlSpan += html[i]
-    i++
-    consumed++
-  }
-  return { htmlSpan, nextI: i }
-}
-
-function consumeEntityMatch(html: string, start: number, count: number): { htmlSpan: string; nextI: number } {
-  return consumePlainMatch(html, start, count)
-}
-
-function decodeEntity(entity: string): string {
-  const map: Record<string, string> = {
-    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#039;': "'"
-  }
-  return map[entity] ?? entity.slice(1, -1)
-}
-
-// ── Syntax highlighting (unchanged) ──────────────────────────────────────────
-
-function highlightJson(json: string): string {
-  return json
-    .replace(/"([^"\\]|\\.)*"/g, (match) => `<span class="string">${escapeHtml(match)}</span>`)
-    .replace(/\b(-?\d+\.?\d*([eE][+-]?\d+)?)\b/g, '<span class="number">$1</span>')
-    .replace(/\b(true|false)\b/g, '<span class="boolean">$1</span>')
-    .replace(/\bnull\b/g, '<span class="null">null</span>')
-    .replace(/<span class="string">((?:"|&quot;).*?(?:"|&quot;))<\/span>(\s*:)/g, '<span class="key">$1</span>$2')
-    .replace(/([\{\}\[\]\(\),])(?![^<]*>)/g, '<span class="punctuation">$1</span>')
-}
+// ── HTML highlighting ─────────────────────────────────────────────────────────
 
 function highlightHtml(html: string): string {
   return escapeHtml(html)

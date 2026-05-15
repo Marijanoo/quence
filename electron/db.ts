@@ -3,18 +3,27 @@ import * as path from 'path'
 import * as fs from 'fs'
 
 function loadEnv() {
-  // Load .env from project root (two levels up from dist-electron/)
-  const envPath = path.join(__dirname, '..', '.env')
-  if (!fs.existsSync(envPath)) return
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n')
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eq = trimmed.indexOf('=')
-    if (eq === -1) continue
-    const key = trimmed.slice(0, eq).trim()
-    const val = trimmed.slice(eq + 1).trim()
-    if (!process.env[key]) process.env[key] = val
+  const candidates = [
+    // Packaged: .env next to the exe
+    path.join(path.dirname(process.execPath), '.env'),
+    // Packaged: .env in resources folder
+    path.join(process.resourcesPath ?? '', '.env'),
+    // Dev: project root (two levels up from dist-electron/)
+    path.join(__dirname, '..', '.env'),
+  ]
+  for (const envPath of candidates) {
+    if (!fs.existsSync(envPath)) continue
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) continue
+      const eq = trimmed.indexOf('=')
+      if (eq === -1) continue
+      const key = trimmed.slice(0, eq).trim()
+      const val = trimmed.slice(eq + 1).trim()
+      if (!process.env[key]) process.env[key] = val
+    }
+    break
   }
 }
 

@@ -303,7 +303,7 @@ export function VariableHighlightInput({
       {variableMatches.length > 0 && (
         <div
           ref={overlayRef}
-          className="absolute inset-0 flex items-center px-3 overflow-hidden pointer-events-none"
+          className="absolute inset-px flex items-center px-3 overflow-hidden pointer-events-none"
           style={{ zIndex: 3 }}
         >
           <div className="flex items-center whitespace-nowrap font-mono text-sm">
@@ -336,7 +336,7 @@ export function VariableHighlightInput({
         onFocus={() => setIsFocused(true)}
         onBlur={() => {
           setIsFocused(false)
-          handleChange(localValue, true)
+          if (localValue !== value) handleChange(localValue, true)
         }}
         onPaste={onPaste}
       />
