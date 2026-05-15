@@ -8,6 +8,7 @@ async function invoke(channel: string, ...args: any[]) {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   makeRequest: (options: any) => ipcRenderer.invoke('make-request', options),
+  cancelRequest: (requestId: string) => ipcRenderer.send('cancel-request', { requestId }),
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),

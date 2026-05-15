@@ -316,6 +316,7 @@ export interface SequenceStepResult {
   duration?: number
   error?: string
   extractedValue?: string  // for extract-json actions
+  response?: ResponseData  // full response for request steps
 }
 
 export interface Sequence {

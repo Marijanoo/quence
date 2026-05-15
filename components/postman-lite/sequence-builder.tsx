@@ -6,15 +6,17 @@ import { generateId } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Play, Plus, Trash2, GripVertical, X, FileJson, Square, Zap } from 'lucide-react'
+import { ResponseViewer } from './response-viewer'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import { Play, Plus, Trash2, GripVertical, X, FileJson, Square, Zap, ChevronRight } from 'lucide-react'
 
 const methodColors: Record<string, string> = {
-  GET: 'text-[oklch(0.72_0.19_160)]',
-  POST: 'text-[oklch(0.75_0.18_80)]',
-  PUT: 'text-[oklch(0.65_0.2_250)]',
-  PATCH: 'text-[oklch(0.7_0.15_300)]',
-  DELETE: 'text-[oklch(0.65_0.22_25)]',
-  HEAD: 'text-[oklch(0.6_0.12_200)]',
+  GET: 'text-[oklch(0.88_0.15_140)]',
+  POST: 'text-[oklch(0.88_0.14_75)]',
+  PUT: 'text-[oklch(0.88_0.13_240)]',
+  PATCH: 'text-[oklch(0.88_0.13_300)]',
+  DELETE: 'text-[oklch(0.88_0.14_15)]',
+  HEAD: 'text-[oklch(0.88_0.11_195)]',
   OPTIONS: 'text-muted-foreground',
 }
 
@@ -70,6 +72,7 @@ export function SequenceBuilder({
   const [isCreating, setIsCreating] = useState(false)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const [dragStepIdx, setDragStepIdx] = useState<number | null>(null)
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
 
   const activeSequence = sequences.find(s => s.id === activeSequenceId) ?? null
@@ -295,8 +298,10 @@ export function SequenceBuilder({
         </div>
       </div>
 
-      {/* Step editor */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <ResizablePanelGroup direction="horizontal" className="flex-1 min-w-0 min-h-0">
+      <ResizablePanel defaultSize={40} minSize={20}>
+      {/* Step list */}
+      <div className="flex flex-col h-full border-r border-border">
         {activeSequence ? (
           <>
             <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
@@ -338,6 +343,7 @@ export function SequenceBuilder({
                   {activeSequence.steps.map((step, idx) => {
                     const result = stepResults[step.id]
                     const isAction = step.type === 'action'
+                    const isSelected = selectedStepId === step.id
                     return (
                       <div
                         key={step.id}
@@ -347,12 +353,14 @@ export function SequenceBuilder({
                           dragStepIdx === idx && 'opacity-40',
                           result?.status === 'running' && 'border-[oklch(0.75_0.18_80)]/50',
                           isAction && 'border-dashed',
+                          isSelected && 'border-primary bg-secondary/30',
                         )}
                         draggable
                         onDragStart={e => handleStepDragStart(e, idx)}
                         onDragOver={e => handleStepDragOver(e, idx)}
                         onDrop={e => handleStepDrop(e, idx)}
                         onDragEnd={() => { setDragStepIdx(null); setDragOverIdx(null) }}
+                        onClick={() => setSelectedStepId(isSelected ? null : step.id)}
                       >
                         {isAction ? (
                           /* Action step */
@@ -368,7 +376,7 @@ export function SequenceBuilder({
                               <Button
                                 variant="ghost" size="icon"
                                 className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
-                                onClick={() => removeStep(step.id)}
+                                onClick={e => { e.stopPropagation(); removeStep(step.id) }}
                               >
                                 <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
                               </Button>
@@ -414,7 +422,7 @@ export function SequenceBuilder({
                             <Button
                               variant="ghost" size="icon"
                               className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
-                              onClick={() => removeStep(step.id)}
+                              onClick={e => { e.stopPropagation(); removeStep(step.id) }}
                             >
                               <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
                             </Button>
@@ -431,6 +439,108 @@ export function SequenceBuilder({
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
             <Play className="h-10 w-10 mb-3 opacity-20" />
             <p className="text-sm">Create a sequence to get started</p>
+          </div>
+        )}
+      </div>
+      </ResizablePanel>
+
+      <ResizableHandle className="w-px bg-border" />
+
+      {/* Detail panel */}
+      <ResizablePanel defaultSize={60} minSize={20}>
+      <div className="flex flex-col h-full min-w-0">
+        <StepDetail
+          step={activeSequence?.steps.find(s => s.id === selectedStepId) ?? null}
+          result={selectedStepId ? stepResults[selectedStepId] : undefined}
+        />
+      </div>
+      </ResizablePanel>
+      </ResizablePanelGroup>
+    </div>
+  )
+}
+
+function StepDetail({ step, result }: { step: SequenceStep | null; result?: SequenceStepResult }) {
+  if (!step) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground h-full">
+        <ChevronRight className="h-8 w-8 mb-2 opacity-20" />
+        <p className="text-sm">Click a step to see its result</p>
+      </div>
+    )
+  }
+
+  if (step.type === 'request') {
+    return (
+      <div className="flex flex-col h-full min-h-0">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
+          <span className={cn('font-mono text-xs font-semibold shrink-0', methodColors[step.method ?? ''] ?? 'text-muted-foreground')}>
+            {step.method}
+          </span>
+          <span className="text-sm font-medium truncate flex-1">{step.name}</span>
+          {result?.duration !== undefined && result.status !== 'idle' && result.status !== 'running' && (
+            <span className="text-xs text-muted-foreground shrink-0">{result.duration}ms</span>
+          )}
+        </div>
+        <div className="flex-1 min-h-0">
+          <ResponseViewer response={result?.response ?? null} isLoading={result?.status === 'running'} />
+        </div>
+      </div>
+    )
+  }
+
+  // Action step
+  const { action } = step
+  const statusColor = !result || result.status === 'idle' ? 'text-muted-foreground'
+    : result.status === 'running' ? 'text-[oklch(0.75_0.18_80)]'
+    : result.status === 'success' ? 'text-[oklch(0.72_0.19_160)]'
+    : 'text-[oklch(0.65_0.22_25)]'
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+        <Zap className="h-4 w-4 text-[oklch(0.75_0.18_80)] shrink-0" />
+        <span className="text-sm font-medium flex-1">Extract JSON</span>
+      </div>
+      <div className="p-4 space-y-4">
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Configuration</p>
+          <div className="rounded-md border border-border bg-card p-3 space-y-2">
+            <div className="flex gap-3">
+              <span className="text-xs text-muted-foreground w-20 shrink-0">JSON key</span>
+              <span className="text-xs font-mono text-foreground">{action?.jsonKey || <span className="text-muted-foreground italic">not set</span>}</span>
+            </div>
+            <div className="flex gap-3">
+              <span className="text-xs text-muted-foreground w-20 shrink-0">Save to</span>
+              <span className="text-xs font-mono text-foreground">{action?.envVariable || <span className="text-muted-foreground italic">not set</span>}</span>
+            </div>
+          </div>
+        </div>
+
+        {result && result.status !== 'idle' && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Result</p>
+            <div className="rounded-md border border-border bg-card p-3 space-y-2">
+              <div className="flex gap-3">
+                <span className="text-xs text-muted-foreground w-20 shrink-0">Status</span>
+                <span className={cn('text-xs font-semibold capitalize', statusColor)}>
+                  {result.status}
+                </span>
+              </div>
+              {result.extractedValue !== undefined && (
+                <div className="flex gap-3">
+                  <span className="text-xs text-muted-foreground w-20 shrink-0">Value</span>
+                  <span className="text-xs font-mono text-[oklch(0.72_0.19_160)] break-all">{result.extractedValue}</span>
+                </div>
+              )}
+              {result.error && (
+                <div className="flex gap-3">
+                  <span className="text-xs text-muted-foreground w-20 shrink-0">Error</span>
+                  <span className="text-xs text-[oklch(0.65_0.22_25)] break-all">{result.error}</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
