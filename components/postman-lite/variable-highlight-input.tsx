@@ -17,6 +17,7 @@ interface VariableHighlightInputProps {
   variables: EnvironmentVariable[]
   onUpdateVariable?: (key: string, value: string) => void
   disabled?: boolean
+  readOnly?: boolean
 }
 
 interface VariableMatch {
@@ -50,6 +51,7 @@ export function VariableHighlightInput({
   variables,
   onUpdateVariable,
   disabled,
+  readOnly,
 }: VariableHighlightInputProps) {
   const [isFocused, setIsFocused] = useState(false)
   const [popoverMatch, setPopoverMatch] = useState<VariableMatch | null>(null)
@@ -329,6 +331,7 @@ export function VariableHighlightInput({
         autoCapitalize="off"
         spellCheck={false}
         disabled={disabled}
+        readOnly={readOnly}
         style={variableMatches.length > 0 ? { caretColor: 'var(--foreground)', position: 'relative', zIndex: 4, background: 'transparent' } : undefined}
         onFocus={() => setIsFocused(true)}
         onBlur={() => {

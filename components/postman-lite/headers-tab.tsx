@@ -15,6 +15,7 @@ import { createKeyValuePair } from '@/lib/db/types'
 interface HeadersTabProps {
   headers: KeyValuePair[]
   onChange: (headers: KeyValuePair[]) => void
+  readOnly?: boolean
 }
 
 const commonHeaders = [
@@ -25,7 +26,7 @@ const commonHeaders = [
   { key: 'User-Agent', value: 'Postman Lite' },
 ]
 
-export function HeadersTab({ headers, onChange }: HeadersTabProps) {
+export function HeadersTab({ headers, onChange, readOnly }: HeadersTabProps) {
   const addCommonHeader = (header: { key: string; value: string }) => {
     const newHeader = createKeyValuePair(header.key, header.value)
     onChange([...headers, newHeader])
@@ -33,27 +34,29 @@ export function HeadersTab({ headers, onChange }: HeadersTabProps) {
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="text-xs">
-              <Plus className="h-3 w-3 mr-1" />
-              Common Headers
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {commonHeaders.map((header) => (
-              <DropdownMenuItem
-                key={header.key}
-                onClick={() => addCommonHeader(header)}
-                className="font-mono text-xs"
-              >
-                {header.key}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      {!readOnly && (
+        <div className="flex items-center justify-between mb-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="text-xs">
+                <Plus className="h-3 w-3 mr-1" />
+                Common Headers
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {commonHeaders.map((header) => (
+                <DropdownMenuItem
+                  key={header.key}
+                  onClick={() => addCommonHeader(header)}
+                  className="font-mono text-xs"
+                >
+                  {header.key}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       <KeyValueEditor
         pairs={headers}
@@ -61,6 +64,7 @@ export function HeadersTab({ headers, onChange }: HeadersTabProps) {
         showDescription
         keyPlaceholder="Header"
         valuePlaceholder="Value"
+        readOnly={readOnly}
       />
     </div>
   )

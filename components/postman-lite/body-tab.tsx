@@ -21,6 +21,7 @@ interface BodyTabProps {
   onTypeChange: (type: BodyType) => void
   onContentChange: (content: string) => void
   onFormDataChange: (formData: KeyValuePair[]) => void
+  readOnly?: boolean
 }
 
 const bodyTypes: { value: BodyType; label: string }[] = [
@@ -38,13 +39,14 @@ export function BodyTab({
   onTypeChange,
   onContentChange,
   onFormDataChange,
+  readOnly,
 }: BodyTabProps) {
   const { variables, updateVariable } = useEnvironmentContext()
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 p-4 pb-2 shrink-0">
-        <Select value={bodyType} onValueChange={(v) => onTypeChange(v as BodyType)}>
+        <Select value={bodyType} onValueChange={(v) => onTypeChange(v as BodyType)} disabled={readOnly}>
           <SelectTrigger className="w-[200px] bg-secondary border-border">
             <SelectValue />
           </SelectTrigger>
@@ -57,7 +59,7 @@ export function BodyTab({
           </SelectContent>
         </Select>
 
-        {bodyType === 'json' && (
+        {bodyType === 'json' && !readOnly && (
           <Button
             variant="ghost"
             size="sm"
@@ -93,6 +95,7 @@ export function BodyTab({
             onUpdateVariable={updateVariable}
             language={bodyType === 'json' ? 'json' : 'text'}
             className="h-full"
+            readOnly={readOnly}
           />
         </div>
       )}
@@ -105,6 +108,7 @@ export function BodyTab({
             keyPlaceholder="Key"
             valuePlaceholder="Value"
             allowFiles={bodyType === 'form-data'}
+            readOnly={readOnly}
           />
         </div>
       )}

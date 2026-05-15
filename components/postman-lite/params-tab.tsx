@@ -6,9 +6,10 @@ import { KeyValueEditor } from './key-value-editor'
 interface ParamsTabProps {
   params: KeyValuePair[]
   onChange: (params: KeyValuePair[]) => void
+  readOnly?: boolean
 }
 
-export function ParamsTab({ params, onChange }: ParamsTabProps) {
+export function ParamsTab({ params, onChange, readOnly }: ParamsTabProps) {
   return (
     <div className="p-4">
       <KeyValueEditor
@@ -17,6 +18,7 @@ export function ParamsTab({ params, onChange }: ParamsTabProps) {
         showDescription
         keyPlaceholder="Parameter"
         valuePlaceholder="Value"
+        readOnly={readOnly}
       />
     </div>
   )

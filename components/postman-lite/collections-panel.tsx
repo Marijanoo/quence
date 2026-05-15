@@ -44,11 +44,13 @@ interface CollectionsPanelProps {
   collections: Collection[]
   requests: RequestConfig[]
   socketConfigs?: SocketConfig[]
+  canWrite?: boolean
   onCreateCollection: (name: string) => void
   onDeleteCollection: (id: string) => void
   onRenameCollection: (id: string, name: string) => void
   onReorderCollections: (ordered: Collection[]) => void
   onReorderRequests: (ordered: RequestConfig[]) => void
+  onMoveRequest: (requestId: string, targetCollectionId: string) => void
   onOpenRequest: (request: RequestConfig) => void
   onDeleteRequest: (id: string) => void
   onSaveRequest: (request: RequestConfig, collectionId: string) => void
@@ -72,11 +74,13 @@ export function CollectionsPanel({
   collections,
   requests,
   socketConfigs = [],
+  canWrite = true,
   onCreateCollection,
   onDeleteCollection,
   onRenameCollection,
   onReorderCollections,
   onReorderRequests,
+  onMoveRequest,
   onOpenRequest,
   onDeleteRequest,
   onImportCollection,
@@ -108,8 +112,17 @@ export function CollectionsPanel({
   const [dragOverCollectionId, setDragOverCollectionId] = useState<string | null>(null)
   const [dragRequestId, setDragRequestId] = useState<string | null>(null)
   const [dragOverRequestId, setDragOverRequestId] = useState<string | null>(null)
-  // which collection the dragged request belongs to (so we only reorder within one collection)
+  // highlight on a collection header when dragging a request over it
+  const [dragRequestOverCollectionId, setDragRequestOverCollectionId] = useState<string | null>(null)
+  // which collection the dragged request belongs to
   const dragRequestCollectionId = useRef<string | null>(null)
+
+  const clearRequestDragState = useCallback(() => {
+    setDragRequestId(null)
+    setDragOverRequestId(null)
+    setDragRequestOverCollectionId(null)
+    dragRequestCollectionId.current = null
+  }, [])
 
   const handleCollectionDragStart = useCallback((e: React.DragEvent, id: string) => {
     setDragCollectionId(id)
@@ -117,13 +130,29 @@ export function CollectionsPanel({
   }, [])
 
   const handleCollectionDragOver = useCallback((e: React.DragEvent, id: string) => {
+    // Only handle collection reordering when dragging a collection (not a request)
+    if (dragRequestId) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setDragOverCollectionId(id)
-  }, [])
+  }, [dragRequestId])
 
   const handleCollectionDrop = useCallback((e: React.DragEvent, targetId: string) => {
     e.preventDefault()
+    e.stopPropagation()
+
+    // Request dropped onto a collection header → move to that collection
+    if (dragRequestId) {
+      const sourceCollectionId = dragRequestCollectionId.current
+      if (sourceCollectionId !== targetId) {
+        onMoveRequest(dragRequestId, targetId)
+      }
+      clearRequestDragState()
+      setDragOverCollectionId(null)
+      return
+    }
+
+    // Collection reorder
     if (!dragCollectionId || dragCollectionId === targetId) {
       setDragCollectionId(null)
       setDragOverCollectionId(null)
@@ -138,7 +167,7 @@ export function CollectionsPanel({
     onReorderCollections(reordered)
     setDragCollectionId(null)
     setDragOverCollectionId(null)
-  }, [collections, dragCollectionId, onReorderCollections])
+  }, [collections, dragCollectionId, dragRequestId, onReorderCollections, onMoveRequest, clearRequestDragState])
 
   const handleCollectionDragEnd = useCallback(() => {
     setDragCollectionId(null)
@@ -151,38 +180,53 @@ export function CollectionsPanel({
     e.dataTransfer.effectAllowed = 'move'
   }, [])
 
-  const handleRequestDragOver = useCallback((e: React.DragEvent, requestId: string, collectionId: string) => {
+  const handleRequestDragOverCollection = useCallback((e: React.DragEvent, collectionId: string) => {
+    if (!dragRequestId) return
     e.preventDefault()
-    if (dragRequestCollectionId.current !== collectionId) return
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    setDragRequestOverCollectionId(collectionId)
+    setDragOverRequestId(null)
+  }, [dragRequestId])
+
+  const handleRequestDragOver = useCallback((e: React.DragEvent, requestId: string, collectionId: string) => {
+    if (!dragRequestId) return
+    e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setDragOverRequestId(requestId)
-  }, [])
+    // Show collection header highlight only when hovering a request in a different collection
+    setDragRequestOverCollectionId(dragRequestCollectionId.current !== collectionId ? collectionId : null)
+  }, [dragRequestId])
 
   const handleRequestDrop = useCallback((e: React.DragEvent, targetRequestId: string, collectionId: string) => {
     e.preventDefault()
-    if (!dragRequestId || dragRequestId === targetRequestId || dragRequestCollectionId.current !== collectionId) {
-      setDragRequestId(null)
-      setDragOverRequestId(null)
-      return
+    e.stopPropagation()
+    if (!dragRequestId) return
+
+    const sourceCollectionId = dragRequestCollectionId.current
+
+    if (sourceCollectionId !== collectionId) {
+      // Cross-collection: move the request to the target collection
+      onMoveRequest(dragRequestId, collectionId)
+    } else if (dragRequestId !== targetRequestId) {
+      // Same-collection reorder
+      const collRequests = requests.filter(r => r.collectionId === collectionId)
+      const from = collRequests.findIndex(r => r.id === dragRequestId)
+      const to = collRequests.findIndex(r => r.id === targetRequestId)
+      if (from !== -1 && to !== -1) {
+        const reordered = [...collRequests]
+        const [moved] = reordered.splice(from, 1)
+        reordered.splice(to, 0, moved)
+        onReorderRequests(reordered)
+      }
     }
-    const collRequests = requests.filter(r => r.collectionId === collectionId)
-    const from = collRequests.findIndex(r => r.id === dragRequestId)
-    const to = collRequests.findIndex(r => r.id === targetRequestId)
-    if (from === -1 || to === -1) return
-    const reordered = [...collRequests]
-    const [moved] = reordered.splice(from, 1)
-    reordered.splice(to, 0, moved)
-    onReorderRequests(reordered)
-    setDragRequestId(null)
-    setDragOverRequestId(null)
-    dragRequestCollectionId.current = null
-  }, [requests, dragRequestId, onReorderRequests])
+
+    clearRequestDragState()
+  }, [requests, dragRequestId, onReorderRequests, onMoveRequest, clearRequestDragState])
 
   const handleRequestDragEnd = useCallback(() => {
-    setDragRequestId(null)
-    setDragOverRequestId(null)
-    dragRequestCollectionId.current = null
-  }, [])
+    clearRequestDragState()
+  }, [clearRequestDragState])
 
   // Auto-expand collections when a socket config is saved into them
   useEffect(() => {
@@ -479,26 +523,28 @@ export function CollectionsPanel({
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h3 className="text-sm font-medium text-foreground">Collections</h3>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => fileInputRef.current?.click()}
-            title="Import Collection"
-          >
-            <Upload className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setIsCreateDialogOpen(true)}
-            title="New Collection"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+        {canWrite && (
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import Collection"
+            >
+              <Upload className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setIsCreateDialogOpen(true)}
+              title="New Collection"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -547,7 +593,8 @@ export function CollectionsPanel({
               const collectionRequests = getRequestsForCollection(collection.id)
               const collectionSockets = getSocketConfigsForCollection(collection.id)
               const isExpanded = isSearching ? (collectionRequests.length > 0 || collectionSockets.length > 0) : expandedCollections.has(collection.id)
-              const isDraggingOver = dragOverCollectionId === collection.id && dragCollectionId !== collection.id
+              const isCollectionDraggingOver = dragOverCollectionId === collection.id && dragCollectionId !== collection.id
+              const isRequestDraggingOverHeader = dragRequestOverCollectionId === collection.id && dragRequestCollectionId.current !== collection.id
 
               return (
                 <Collapsible
@@ -559,17 +606,24 @@ export function CollectionsPanel({
                     className={cn(
                       'group flex items-center hover:bg-secondary/50',
                       dragCollectionId === collection.id && 'opacity-40',
-                      isDraggingOver && 'border-t-2 border-primary',
+                      isCollectionDraggingOver && 'border-t-2 border-primary',
+                      isRequestDraggingOverHeader && 'bg-primary/10 outline outline-1 outline-primary rounded',
                     )}
-                    draggable={!isSearching}
-                    onDragStart={!isSearching ? (e) => handleCollectionDragStart(e, collection.id) : undefined}
-                    onDragOver={!isSearching ? (e) => handleCollectionDragOver(e, collection.id) : undefined}
-                    onDrop={!isSearching ? (e) => handleCollectionDrop(e, collection.id) : undefined}
-                    onDragEnd={!isSearching ? handleCollectionDragEnd : undefined}
+                    draggable={canWrite && !isSearching}
+                    onDragStart={canWrite && !isSearching ? (e) => handleCollectionDragStart(e, collection.id) : undefined}
+                    onDragOver={canWrite && !isSearching ? (e) => {
+                      handleCollectionDragOver(e, collection.id)
+                      handleRequestDragOverCollection(e, collection.id)
+                    } : undefined}
+                    onDrop={canWrite && !isSearching ? (e) => handleCollectionDrop(e, collection.id) : undefined}
+                    onDragEnd={canWrite && !isSearching ? handleCollectionDragEnd : undefined}
+                    onDragLeave={canWrite ? () => setDragRequestOverCollectionId(null) : undefined}
                   >
-                    <span className="pl-1 pr-0.5 cursor-grab text-muted-foreground opacity-0 group-hover:opacity-50 shrink-0">
-                      <GripVertical className="h-3.5 w-3.5" />
-                    </span>
+                    {canWrite && (
+                      <span className="pl-1 pr-0.5 cursor-grab text-muted-foreground opacity-0 group-hover:opacity-50 shrink-0">
+                        <GripVertical className="h-3.5 w-3.5" />
+                      </span>
+                    )}
                     <CollapsibleTrigger className="flex items-center flex-1 px-2 py-1.5 text-sm min-w-0">
                       <ChevronRight
                         className={cn(
@@ -594,21 +648,25 @@ export function CollectionsPanel({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openRenameDialog(collection)}>
-                          <Pencil className="h-4 w-4 mr-2" />
-                          Rename
-                        </DropdownMenuItem>
+                        {canWrite && (
+                          <DropdownMenuItem onClick={() => openRenameDialog(collection)}>
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Rename
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => handleExportCollection(collection)}>
                           <Download className="h-4 w-4 mr-2" />
                           Export
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => onDeleteCollection(collection.id)}
-                          className="text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
+                        {canWrite && (
+                          <DropdownMenuItem
+                            onClick={() => onDeleteCollection(collection.id)}
+                            className="text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -629,34 +687,38 @@ export function CollectionsPanel({
                           </span>
                           <span className="truncate text-xs text-muted-foreground">{sc.name}</span>
                         </button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
-                          onClick={() => onDeleteSocketConfig?.(sc.id)}
-                        >
-                          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                        </Button>
+                        {canWrite && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
+                            onClick={() => onDeleteSocketConfig?.(sc.id)}
+                          >
+                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                          </Button>
+                        )}
                       </div>
                     ))}
                     {collectionRequests.map((request) => {
-                      const isReqDraggingOver = !sequenceDragMode && dragOverRequestId === request.id && dragRequestId !== request.id && dragRequestCollectionId.current === collection.id
+                      const isSameCollection = dragRequestCollectionId.current === collection.id
+                      const isReqDraggingOver = !sequenceDragMode && dragOverRequestId === request.id && dragRequestId !== request.id
                       return (
                         <div
                           key={request.id}
                           className={cn(
                             'group flex items-center hover:bg-secondary/50 pl-10 pr-2',
                             !sequenceDragMode && dragRequestId === request.id && 'opacity-40',
-                            isReqDraggingOver && 'border-t-2 border-primary',
+                            isReqDraggingOver && isSameCollection && 'border-t-2 border-primary',
+                            isReqDraggingOver && !isSameCollection && 'border-t-2 border-primary/60',
                             sequenceDragMode && 'cursor-grab',
                           )}
-                          draggable={sequenceDragMode || !isSearching}
+                          draggable={sequenceDragMode || (canWrite && !isSearching)}
                           onDragStart={sequenceDragMode
                             ? (e) => { e.dataTransfer.setData('application/sequence-request', JSON.stringify(request)); e.dataTransfer.effectAllowed = 'copy' }
-                            : (!isSearching ? (e) => handleRequestDragStart(e, request.id, collection.id) : undefined)}
-                          onDragOver={!sequenceDragMode && !isSearching ? (e) => handleRequestDragOver(e, request.id, collection.id) : undefined}
-                          onDrop={!sequenceDragMode && !isSearching ? (e) => handleRequestDrop(e, request.id, collection.id) : undefined}
-                          onDragEnd={!sequenceDragMode && !isSearching ? handleRequestDragEnd : undefined}
+                            : (canWrite && !isSearching ? (e) => handleRequestDragStart(e, request.id, collection.id) : undefined)}
+                          onDragOver={canWrite && !sequenceDragMode && !isSearching ? (e) => handleRequestDragOver(e, request.id, collection.id) : undefined}
+                          onDrop={canWrite && !sequenceDragMode && !isSearching ? (e) => handleRequestDrop(e, request.id, collection.id) : undefined}
+                          onDragEnd={canWrite && !sequenceDragMode && !isSearching ? handleRequestDragEnd : undefined}
                         >
                           <button
                             onClick={sequenceDragMode ? undefined : () => onOpenRequest(request)}
@@ -670,7 +732,7 @@ export function CollectionsPanel({
                               {request.name}
                             </span>
                           </button>
-                          {!sequenceDragMode && (
+                          {!sequenceDragMode && canWrite && (
                             <Button
                               variant="ghost"
                               size="icon"

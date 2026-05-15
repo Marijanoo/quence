@@ -20,23 +20,28 @@ import {
   createNewWorkspace,
 } from '@/lib/db/types'
 import { generateId } from '@/lib/utils'
+import { useAuth } from '@/lib/auth/auth-context'
 
 const ACTIVE_WORKSPACE_KEY = 'postman-lite-active-workspace'
 
 // Generic database hook (shared singleton)
 function useDatabase() {
+  const { state } = useAuth()
+  const userId = state.status === 'authenticated' ? state.session.user.id : undefined
+
   const [db, setDb] = useState<import('@/lib/db').DatabaseAdapter | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    if (!userId) return
     async function initDb() {
       const { getDatabase } = await import('@/lib/db')
-      const database = await getDatabase()
+      const database = await getDatabase(userId)
       setDb(database)
       setIsLoading(false)
     }
     initDb()
-  }, [])
+  }, [userId])
 
   return { db, isLoading }
 }
@@ -44,6 +49,8 @@ function useDatabase() {
 // Workspace manager — workspace list + active selection
 export function useWorkspaceManager() {
   const { db, isLoading: dbLoading } = useDatabase()
+  const { state: authState } = useAuth()
+  const currentUser = authState.status === 'authenticated' ? authState.session.user : undefined
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
@@ -62,26 +69,14 @@ export function useWorkspaceManager() {
   }, [db])
 
   useEffect(() => {
-    if (!db || dbLoading) return
+    if (!db || dbLoading || !currentUser) return
     ;(async () => {
       const data = await refresh()
 
       if (data.length === 0) {
-        // First run: create default workspace and migrate any v1 orphaned data
-        const ws = createNewWorkspace('My Workspace')
+        // First run: create default workspace
+        const ws = createNewWorkspace('My Workspace', currentUser)
         await db.createWorkspace(ws)
-
-        const orphanCollections = await db.getCollections()
-        for (const col of orphanCollections) {
-          if (!col.workspaceId) await db.updateCollection(col.id, { workspaceId: ws.id })
-        }
-        const orphanEnvs = await db.getEnvironments()
-        for (const env of orphanEnvs) {
-          if (!env.workspaceId) await db.updateEnvironment(env.id, { workspaceId: ws.id })
-        }
-        // Migrate old tab state stored under 'default' key
-        const oldState = await db.getWorkspaceState('default')
-        if (oldState) await db.saveWorkspaceState(ws.id, oldState)
 
         setActiveWorkspaceId(ws.id)
         localStorage.setItem(ACTIVE_WORKSPACE_KEY, ws.id)
@@ -95,13 +90,13 @@ export function useWorkspaceManager() {
       }
       setIsLoading(false)
     })()
-  }, [db, dbLoading, refresh])
+  }, [db, dbLoading, currentUser, refresh])
 
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) ?? null
 
-  const create = useCallback(async (name: string) => {
+  const create = useCallback(async (name: string, owner?: { id: string; name: string; email: string }) => {
     if (!db) return
-    const ws = createNewWorkspace(name)
+    const ws = createNewWorkspace(name, owner)
     await db.createWorkspace(ws)
     await refresh()
     setActiveWorkspaceId(ws.id)
@@ -112,6 +107,12 @@ export function useWorkspaceManager() {
   const rename = useCallback(async (id: string, name: string) => {
     if (!db) return
     await db.updateWorkspace(id, { name })
+    await refresh()
+  }, [db, refresh])
+
+  const update = useCallback(async (id: string, data: Partial<Workspace>) => {
+    if (!db) return
+    await db.updateWorkspace(id, data)
     await refresh()
   }, [db, refresh])
 
@@ -140,6 +141,7 @@ export function useWorkspaceManager() {
     isLoading: isLoading || dbLoading,
     create,
     rename,
+    update,
     remove,
     switchTo,
   }
@@ -466,8 +468,18 @@ export function useWorkspace(workspaceId?: string | null) {
     ;(async () => {
       setIsLoading(true)
       const saved = await db.getWorkspaceState(workspaceId)
-      if (saved && saved.tabs.length > 0) {
-        setState(saved)
+      if (saved) {
+        // Re-hydrate saved tabs: fetch fresh request data from DB for any saved request,
+        // so unsaved local edits from other users never bleed through.
+        const hydratedTabs = await Promise.all(
+          saved.tabs.map(async (tab) => {
+            if (!tab.requestId) return tab
+            const fresh = await db.getRequest(tab.requestId)
+            if (!fresh) return tab
+            return { ...tab, request: fresh, isDirty: false }
+          })
+        )
+        setState({ ...saved, tabs: hydratedTabs })
       } else {
         const newTab: WorkspaceTab = {
           id: generateId(),
@@ -483,10 +495,20 @@ export function useWorkspace(workspaceId?: string | null) {
     })()
   }, [db, dbLoading, workspaceId])
 
+  // Persist state to DB, but strip request bodies from saved-request tabs so
+  // unsaved local edits are never written to the shared workspace state.
   const saveState = useCallback(async (newState: WorkspaceState) => {
     if (!db || !workspaceId) return
     setState(newState)
-    await db.saveWorkspaceState(workspaceId, newState)
+    const stripped: WorkspaceState = {
+      ...newState,
+      tabs: newState.tabs.map((tab) =>
+        tab.requestId
+          ? { ...tab, request: { id: tab.requestId } as RequestConfig, isDirty: false }
+          : tab
+      ),
+    }
+    await db.saveWorkspaceState(workspaceId, stripped)
   }, [db, workspaceId])
 
   const activeTab = state.tabs.find(t => t.id === state.activeTabId)
@@ -506,20 +528,11 @@ export function useWorkspace(workspaceId?: string | null) {
   const closeTab = useCallback(async (tabId: string) => {
     const tabIndex = state.tabs.findIndex(t => t.id === tabId)
     const newTabs = state.tabs.filter(t => t.id !== tabId)
-    let newActiveId = state.activeTabId
+    let newActiveId: string | null = state.activeTabId
     if (state.activeTabId === tabId) {
-      if (newTabs.length > 0) {
-        newActiveId = newTabs[Math.min(tabIndex, newTabs.length - 1)].id
-      } else {
-        const newTab: WorkspaceTab = {
-          id: generateId(),
-          request: createNewRequest(),
-          response: null,
-          isDirty: false,
-        }
-        newTabs.push(newTab)
-        newActiveId = newTab.id
-      }
+      newActiveId = newTabs.length > 0
+        ? newTabs[Math.min(tabIndex, newTabs.length - 1)].id
+        : null
     }
     await saveState({ tabs: newTabs, activeTabId: newActiveId })
   }, [state, saveState])

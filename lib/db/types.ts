@@ -106,9 +106,34 @@ export interface RequestConfig {
   updatedAt: number
 }
 
+export type WorkspacePermission = 'read' | 'read-write'
+
+export interface WorkspaceMember {
+  userId: string
+  email: string
+  name: string
+  permission: WorkspacePermission
+  joinedAt: number
+}
+
+export interface WorkspaceInvite {
+  id: string
+  workspaceId: string
+  workspaceName: string
+  ownerEmail: string
+  ownerName: string
+  inviteeEmail: string
+  permission: WorkspacePermission
+  createdAt: number
+}
+
 export interface Workspace {
   id: string
   name: string
+  ownerId: string
+  ownerName: string
+  ownerEmail: string
+  members: WorkspaceMember[]
   createdAt: number
   updatedAt: number
 }
@@ -206,11 +231,15 @@ export function createNewRequest(overrides?: Partial<RequestConfig>): RequestCon
 }
 
 // Factory function to create a new workspace
-export function createNewWorkspace(name: string): Workspace {
+export function createNewWorkspace(name: string, owner?: { id: string; name: string; email: string }): Workspace {
   const now = Date.now()
   return {
     id: generateId(),
     name,
+    ownerId: owner?.id ?? 'local',
+    ownerName: owner?.name ?? 'Me',
+    ownerEmail: owner?.email ?? '',
+    members: [],
     createdAt: now,
     updatedAt: now,
   }

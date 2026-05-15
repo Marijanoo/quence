@@ -228,6 +228,7 @@ interface VariableHighlightTextareaProps {
   variables: EnvironmentVariable[]
   onUpdateVariable?: (key: string, value: string) => void
   language?: 'json' | 'text'
+  readOnly?: boolean
 }
 
 interface HistoryEntry { value: string; ss: number; se: number }
@@ -241,6 +242,7 @@ export function VariableHighlightTextarea({
   variables,
   onUpdateVariable,
   language = 'text',
+  readOnly,
 }: VariableHighlightTextareaProps) {
   const [localValue, setLocalValue] = useState(value)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -632,7 +634,7 @@ export function VariableHighlightTextarea({
         <textarea
           ref={textareaRef}
           value={localValue}
-          onChange={(e) => {
+          onChange={readOnly ? undefined : (e) => {
             const val = e.target.value
             const ss = e.target.selectionStart ?? 0
             const se = e.target.selectionEnd ?? 0
@@ -642,11 +644,12 @@ export function VariableHighlightTextarea({
             scheduleCheckpoint(val, ss, se)
           }}
           onBlur={() => { isComposingRef.current = false }}
-          onKeyDown={(e) => { handleKeyDown(e); onKeyDownProp?.(e) }}
+          onKeyDown={readOnly ? undefined : (e) => { handleKeyDown(e); onKeyDownProp?.(e) }}
           onClick={updateActiveLine}
           onKeyUp={updateActiveLine}
           onFocus={updateActiveLine}
           onScroll={syncScroll}
+          readOnly={readOnly}
           spellCheck={false}
           autoComplete="off"
           autoCorrect="off"
@@ -654,7 +657,7 @@ export function VariableHighlightTextarea({
           className="absolute inset-0 w-full h-full resize-none bg-transparent outline-none border-none overflow-auto"
           style={{
             color: 'transparent',
-            caretColor: 'var(--primary)',
+            caretColor: readOnly ? 'transparent' : 'var(--primary)',
             paddingTop: 12,
             paddingBottom: 12,
             paddingLeft: gutterWidth + 12,

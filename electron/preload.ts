@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+async function invoke(channel: string, ...args: any[]) {
+  const result = await ipcRenderer.invoke(channel, ...args)
+  if (result && !result.ok) throw new Error(result.error)
+  return result?.data
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   makeRequest: (options: any) => ipcRenderer.invoke('make-request', options),
   minimize: () => ipcRenderer.send('window-minimize'),
@@ -24,5 +30,70 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('ws-message')
     ipcRenderer.removeAllListeners('ws-close')
     ipcRenderer.removeAllListeners('ws-error')
+  },
+
+  db: {
+    auth: {
+      login:      (email: string, password: string) => invoke('db:auth:login', email, password),
+      register:   (id: string, email: string, name: string, password: string) => invoke('db:auth:register', id, email, name, password),
+      userExists: (id: string) => invoke('db:auth:userExists', id),
+    },
+    workspaces: {
+      get:    (userId: string) => invoke('db:workspaces:get', userId),
+      getOne: (id: string) => invoke('db:workspaces:getOne', id),
+      create: (ws: any) => invoke('db:workspaces:create', ws),
+      update: (id: string, data: any) => invoke('db:workspaces:update', id, data),
+      delete: (id: string) => invoke('db:workspaces:delete', id),
+    },
+    collections: {
+      get:    (workspaceId?: string) => invoke('db:collections:get', workspaceId),
+      getOne: (id: string) => invoke('db:collections:getOne', id),
+      create: (c: any) => invoke('db:collections:create', c),
+      update: (id: string, data: any) => invoke('db:collections:update', id, data),
+      delete: (id: string) => invoke('db:collections:delete', id),
+    },
+    requests: {
+      get:    (collectionId?: string) => invoke('db:requests:get', collectionId),
+      getOne: (id: string) => invoke('db:requests:getOne', id),
+      create: (r: any) => invoke('db:requests:create', r),
+      update: (id: string, data: any) => invoke('db:requests:update', id, data),
+      delete: (id: string) => invoke('db:requests:delete', id),
+    },
+    socketConfigs: {
+      get:    (collectionId?: string) => invoke('db:socketConfigs:get', collectionId),
+      create: (c: any) => invoke('db:socketConfigs:create', c),
+      update: (id: string, data: any) => invoke('db:socketConfigs:update', id, data),
+      delete: (id: string) => invoke('db:socketConfigs:delete', id),
+    },
+    sequences: {
+      get:    (collectionId?: string) => invoke('db:sequences:get', collectionId),
+      create: (s: any) => invoke('db:sequences:create', s),
+      update: (id: string, data: any) => invoke('db:sequences:update', id, data),
+      delete: (id: string) => invoke('db:sequences:delete', id),
+    },
+    history: {
+      get:    (workspaceId?: string, limit?: number) => invoke('db:history:get', workspaceId, limit),
+      add:    (entry: any) => invoke('db:history:add', entry),
+      clear:  (workspaceId?: string) => invoke('db:history:clear', workspaceId),
+      delete: (id: string) => invoke('db:history:delete', id),
+    },
+    environments: {
+      get:       (workspaceId?: string) => invoke('db:environments:get', workspaceId),
+      getOne:    (id: string) => invoke('db:environments:getOne', id),
+      create:    (env: any) => invoke('db:environments:create', env),
+      update:    (id: string, data: any) => invoke('db:environments:update', id, data),
+      delete:    (id: string) => invoke('db:environments:delete', id),
+      setActive: (id: string | null, workspaceId?: string) => invoke('db:environments:setActive', id, workspaceId),
+    },
+    workspaceState: {
+      get:  (workspaceId: string) => invoke('db:workspaceState:get', workspaceId),
+      save: (workspaceId: string, state: any) => invoke('db:workspaceState:save', workspaceId, state),
+    },
+    invites: {
+      forEmail:     (email: string) => invoke('db:invites:forEmail', email),
+      forWorkspace: (workspaceId: string) => invoke('db:invites:forWorkspace', workspaceId),
+      send:         (invite: any) => invoke('db:invites:send', invite),
+      delete:       (id: string) => invoke('db:invites:delete', id),
+    },
   },
 })
