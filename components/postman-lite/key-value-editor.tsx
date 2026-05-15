@@ -19,6 +19,7 @@ interface KeyValueEditorProps {
   valuePlaceholder?: string
   highlightVariables?: boolean
   allowFiles?: boolean
+  readOnly?: boolean
 }
 
 export function KeyValueEditor({
@@ -29,6 +30,7 @@ export function KeyValueEditor({
   valuePlaceholder = 'Value',
   highlightVariables = true,
   allowFiles = false,
+  readOnly = false,
 }: KeyValueEditorProps) {
   const { variables, updateVariable } = useEnvironmentContext()
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
@@ -85,7 +87,8 @@ export function KeyValueEditor({
           <div key={pair.id} className="flex items-center gap-2">
             <Checkbox
               checked={pair.enabled}
-              onCheckedChange={(checked) => handleUpdate(pair.id, 'enabled', !!checked)}
+              onCheckedChange={readOnly ? undefined : (checked) => handleUpdate(pair.id, 'enabled', !!checked)}
+              disabled={readOnly}
               className="border-border"
             />
 
@@ -93,19 +96,23 @@ export function KeyValueEditor({
             {allowFiles && (
               <div className="flex rounded border border-border overflow-hidden shrink-0">
                 <button
-                  onClick={() => handleUpdate(pair.id, 'type', 'text')}
+                  onClick={readOnly ? undefined : () => handleUpdate(pair.id, 'type', 'text')}
+                  disabled={readOnly}
                   className={cn(
                     'px-2 py-1 text-xs transition-colors',
-                    !isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                    !isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary',
+                    readOnly && 'cursor-default'
                   )}
                 >
                   Text
                 </button>
                 <button
-                  onClick={() => handleUpdate(pair.id, 'type', 'file')}
+                  onClick={readOnly ? undefined : () => handleUpdate(pair.id, 'type', 'file')}
+                  disabled={readOnly}
                   className={cn(
                     'px-2 py-1 text-xs transition-colors',
-                    isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                    isFile ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-secondary',
+                    readOnly && 'cursor-default'
                   )}
                 >
                   File
@@ -123,6 +130,7 @@ export function KeyValueEditor({
                   className="h-8 bg-secondary border-border"
                   variables={variables}
                   onUpdateVariable={updateVariable}
+                  readOnly={readOnly}
                 />
               ) : (
                 <Input
@@ -130,6 +138,7 @@ export function KeyValueEditor({
                   onChange={(e) => handleUpdate(pair.id, 'key', e.target.value)}
                   placeholder={keyPlaceholder}
                   className="h-8 bg-secondary border-border text-sm font-mono"
+                  readOnly={readOnly}
                 />
               )}
             </div>
@@ -138,18 +147,26 @@ export function KeyValueEditor({
             <div className="flex-1">
               {isFile ? (
                 <div className="flex items-center gap-1">
-                  <input
-                    ref={el => { fileInputRefs.current[pair.id] = el }}
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => handleFileChange(pair.id, e)}
-                  />
+                  {!readOnly && (
+                    <input
+                      ref={el => { fileInputRefs.current[pair.id] = el }}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => handleFileChange(pair.id, e)}
+                    />
+                  )}
                   {pair.fileData ? (
                     <div className="flex items-center gap-1 flex-1 h-8 px-2 rounded border border-border bg-secondary text-xs text-foreground overflow-hidden">
                       <span className="truncate flex-1">{pair.fileData.name}</span>
-                      <button onClick={() => handleClearFile(pair.id)} className="shrink-0 text-muted-foreground hover:text-destructive">
-                        <X className="h-3 w-3" />
-                      </button>
+                      {!readOnly && (
+                        <button onClick={() => handleClearFile(pair.id)} className="shrink-0 text-muted-foreground hover:text-destructive">
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ) : readOnly ? (
+                    <div className="flex items-center gap-1 flex-1 h-8 px-2 rounded border border-border bg-secondary text-xs text-muted-foreground overflow-hidden">
+                      No file
                     </div>
                   ) : (
                     <Button
@@ -171,6 +188,7 @@ export function KeyValueEditor({
                   className="h-8 bg-secondary border-border"
                   variables={variables}
                   onUpdateVariable={updateVariable}
+                  readOnly={readOnly}
                 />
               ) : (
                 <Input
@@ -178,6 +196,7 @@ export function KeyValueEditor({
                   onChange={(e) => handleUpdate(pair.id, 'value', e.target.value)}
                   placeholder={valuePlaceholder}
                   className="h-8 bg-secondary border-border text-sm font-mono"
+                  readOnly={readOnly}
                 />
               )}
             </div>
@@ -188,29 +207,35 @@ export function KeyValueEditor({
                 onChange={(e) => handleUpdate(pair.id, 'description', e.target.value)}
                 placeholder="Description"
                 className="flex-1 h-8 bg-secondary border-border text-sm"
+                readOnly={readOnly}
               />
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => handleRemove(pair.id)}
-              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleRemove(pair.id)}
+                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
+            {readOnly && <div className="h-8 w-8 shrink-0" />}
           </div>
         )
       })}
 
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={handleAdd}
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <Plus className="h-4 w-4 mr-1" />
-        Add
-      </Button>
+      {!readOnly && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleAdd}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Plus className="h-4 w-4 mr-1" />
+          Add
+        </Button>
+      )}
     </div>
   )
 }

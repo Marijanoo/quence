@@ -39,6 +39,7 @@ import { cn } from '@/lib/utils'
 interface EnvironmentsPanelProps {
   environments: Environment[]
   activeEnvironment?: Environment
+  canWrite?: boolean
   onCreateEnvironment: (name: string) => void
   onImportEnvironment: (env: Environment) => void
   onDeleteEnvironment: (id: string) => void
@@ -49,6 +50,7 @@ interface EnvironmentsPanelProps {
 export function EnvironmentsPanel({
   environments,
   activeEnvironment,
+  canWrite = true,
   onCreateEnvironment,
   onImportEnvironment,
   onDeleteEnvironment,
@@ -175,33 +177,35 @@ export function EnvironmentsPanel({
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h3 className="text-sm font-medium text-foreground">Environments</h3>
-        <div className="flex items-center gap-1">
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept=".json"
-            onChange={handleImport}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => fileInputRef.current?.click()}
-            title="Import environment"
-          >
-            <FileUp className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setIsCreateDialogOpen(true)}
-            title="New environment"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+        {canWrite && (
+          <div className="flex items-center gap-1">
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept=".json"
+              onChange={handleImport}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import environment"
+            >
+              <FileUp className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setIsCreateDialogOpen(true)}
+              title="New environment"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -253,17 +257,21 @@ export function EnvironmentsPanel({
                           <Check className="h-4 w-4 mr-2" />
                           {isActive ? 'Deactivate' : 'Set Active'}
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => openRenameDialog(env)}>
-                          <Pencil className="h-4 w-4 mr-2" />
-                          Rename
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => onDeleteEnvironment(env.id)}
-                          className="text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
+                        {canWrite && (
+                          <DropdownMenuItem onClick={() => openRenameDialog(env)}>
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Rename
+                          </DropdownMenuItem>
+                        )}
+                        {canWrite && (
+                          <DropdownMenuItem
+                            onClick={() => onDeleteEnvironment(env.id)}
+                            className="text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -274,9 +282,10 @@ export function EnvironmentsPanel({
                         <div key={variable.id} className="flex items-center gap-2">
                           <Checkbox
                             checked={variable.enabled}
-                            onCheckedChange={(checked) =>
+                            onCheckedChange={canWrite ? (checked) =>
                               updateVariable(env.id, env.variables, variable.id, 'enabled', !!checked)
-                            }
+                            : undefined}
+                            disabled={!canWrite}
                           />
                           <Input
                             value={variable.key}
@@ -285,6 +294,7 @@ export function EnvironmentsPanel({
                             }
                             placeholder="Variable"
                             className="h-7 text-xs bg-secondary font-mono"
+                            readOnly={!canWrite}
                           />
                           <Input
                             value={variable.value}
@@ -293,26 +303,31 @@ export function EnvironmentsPanel({
                             }
                             placeholder="Value"
                             className="h-7 text-xs bg-secondary font-mono"
+                            readOnly={!canWrite}
                           />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 shrink-0"
-                            onClick={() => deleteVariable(env.id, env.variables, variable.id)}
-                          >
-                            <Trash2 className="h-3 w-3 text-muted-foreground" />
-                          </Button>
+                          {canWrite && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 shrink-0"
+                              onClick={() => deleteVariable(env.id, env.variables, variable.id)}
+                            >
+                              <Trash2 className="h-3 w-3 text-muted-foreground" />
+                            </Button>
+                          )}
                         </div>
                       ))}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-xs text-muted-foreground"
-                        onClick={() => addVariable(env.id, env.variables)}
-                      >
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add Variable
-                      </Button>
+                      {canWrite && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground"
+                          onClick={() => addVariable(env.id, env.variables)}
+                        >
+                          <Plus className="h-3 w-3 mr-1" />
+                          Add Variable
+                        </Button>
+                      )}
                     </div>
                   </CollapsibleContent>
                 </Collapsible>

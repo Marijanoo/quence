@@ -15,6 +15,7 @@ import { useEnvironmentContext } from './environment-context'
 interface AuthTabProps {
   auth: AuthConfig
   onChange: (auth: AuthConfig) => void
+  readOnly?: boolean
 }
 
 const authTypes: { value: AuthType; label: string }[] = [
@@ -24,7 +25,7 @@ const authTypes: { value: AuthType; label: string }[] = [
   { value: 'api-key', label: 'API Key' },
 ]
 
-export function AuthTab({ auth, onChange }: AuthTabProps) {
+export function AuthTab({ auth, onChange, readOnly }: AuthTabProps) {
   const { variables, updateVariable } = useEnvironmentContext()
 
   return (
@@ -32,6 +33,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
       <Select
         value={auth.type}
         onValueChange={(v) => onChange({ ...auth, type: v as AuthType })}
+        disabled={readOnly}
       >
         <SelectTrigger className="w-[200px] bg-secondary border-border">
           <SelectValue />
@@ -63,6 +65,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
             className="bg-secondary border-border"
             variables={variables}
             onUpdateVariable={updateVariable}
+            readOnly={readOnly}
           />
         </div>
       )}
@@ -83,6 +86,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
               className="bg-secondary border-border"
               variables={variables}
               onUpdateVariable={updateVariable}
+              readOnly={readOnly}
             />
           </div>
           <div className="space-y-2">
@@ -99,6 +103,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
               className="bg-secondary border-border"
               variables={variables}
               onUpdateVariable={updateVariable}
+              readOnly={readOnly}
             />
           </div>
         </div>
@@ -120,6 +125,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
               className="bg-secondary border-border"
               variables={variables}
               onUpdateVariable={updateVariable}
+              readOnly={readOnly}
             />
           </div>
           <div className="space-y-2">
@@ -136,6 +142,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
               className="bg-secondary border-border"
               variables={variables}
               onUpdateVariable={updateVariable}
+              readOnly={readOnly}
             />
           </div>
           <div className="space-y-2">
@@ -148,6 +155,7 @@ export function AuthTab({ auth, onChange }: AuthTabProps) {
                   apiKey: { ...auth.apiKey, key: auth.apiKey?.key || '', value: auth.apiKey?.value || '', addTo: v as 'header' | 'query' },
                 })
               }
+              disabled={readOnly}
             >
               <SelectTrigger className="w-[150px] bg-secondary border-border">
                 <SelectValue />

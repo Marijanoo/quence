@@ -25,6 +25,7 @@ interface UrlBarProps {
   onSend: () => void
   onCancel: () => void
   isLoading: boolean
+  readOnly?: boolean
 }
 
 const methods: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
@@ -47,6 +48,7 @@ export function UrlBar({
   onSend,
   onCancel,
   isLoading,
+  readOnly,
 }: UrlBarProps) {
   const { variables, updateVariable } = useEnvironmentContext()
   const [copied, setCopied] = useState(false)
@@ -83,7 +85,7 @@ export function UrlBar({
 
   return (
     <div className="flex items-center gap-2 p-4 border-b border-border">
-      <Select value={method} onValueChange={(v) => onMethodChange(v as HttpMethod)}>
+      <Select value={method} onValueChange={(v) => onMethodChange(v as HttpMethod)} disabled={readOnly}>
         <SelectTrigger className="w-[120px] bg-secondary border-border">
           <SelectValue>
             <span className={cn('font-semibold font-mono text-sm', methodColors[method])}>
@@ -105,12 +107,13 @@ export function UrlBar({
       <div className="flex-1">
         <VariableHighlightInput
           value={url}
-          onChange={onUrlChange}
-          onPaste={handlePaste}
+          onChange={readOnly ? () => {} : onUrlChange}
+          onPaste={readOnly ? undefined : handlePaste}
           placeholder="Enter request URL or paste a curl command"
-          className="bg-secondary border-border"
+          className={cn('bg-secondary border-border', readOnly && 'opacity-70 cursor-default')}
           variables={variables}
           onUpdateVariable={updateVariable}
+          readOnly={readOnly}
         />
       </div>
 

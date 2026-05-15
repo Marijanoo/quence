@@ -34,6 +34,7 @@ interface SocketBuilderProps {
   onDisconnect: () => void
   onSendMessage: (event: string, data: string, type: SocketMessageType, ack: boolean) => void
   onClearMessages: () => void
+  readOnly?: boolean
 }
 
 function formatTime(ts: number): string {
@@ -68,6 +69,7 @@ export function SocketBuilder({
   onDisconnect,
   onSendMessage,
   onClearMessages,
+  readOnly,
 }: SocketBuilderProps) {
   const { variables, updateVariable } = useEnvironmentContext()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -115,7 +117,7 @@ export function SocketBuilder({
         <Select
           value={config.protocol ?? 'ws'}
           onValueChange={(v) => onUpdate({ protocol: v as SocketProtocol })}
-          disabled={isConnected || isConnecting}
+          disabled={readOnly || isConnected || isConnecting}
         >
           <SelectTrigger className="w-[90px] bg-secondary border-border h-8 text-xs font-mono font-semibold shrink-0">
             <SelectValue />
@@ -138,6 +140,7 @@ export function SocketBuilder({
             variables={variables}
             onUpdateVariable={updateVariable}
             disabled={isConnected || isConnecting}
+            readOnly={readOnly}
           />
         </div>
         <div className={cn('flex items-center gap-1 text-xs font-medium shrink-0', statusColors[connectionStatus])}>
@@ -192,6 +195,7 @@ export function SocketBuilder({
                 <Select
                   value={config.messageType}
                   onValueChange={(v) => onUpdate({ messageType: v as SocketMessageType })}
+                  disabled={readOnly}
                 >
                   <SelectTrigger className="w-[110px] bg-secondary border-border h-8 text-xs">
                     <SelectValue />
@@ -208,6 +212,7 @@ export function SocketBuilder({
                     onChange={(e) => onUpdate({ messageEvent: e.target.value })}
                     placeholder="Event name (e.g. message)"
                     className="h-8 bg-secondary border-border text-sm font-mono"
+                    readOnly={readOnly}
                   />
                 </div>
               </div>
@@ -227,27 +232,30 @@ export function SocketBuilder({
                   onUpdateVariable={updateVariable}
                   language={config.messageType === 'json' ? 'json' : 'text'}
                   className="h-full"
+                  readOnly={readOnly}
                 />
               </div>
-              <div className="flex items-center justify-end gap-3">
-                <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                  <Checkbox
-                    checked={ackEnabled}
-                    onCheckedChange={(v) => setAckEnabled(!!v)}
-                    disabled={!isConnected}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-xs text-muted-foreground font-mono">ACK</span>
-                </label>
-                <Button
-                  onClick={handleSend}
-                  disabled={!isConnected || !config.messageContent.trim()}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90"
-                  size="sm"
-                >
-                  Send <span className="ml-1 text-xs opacity-60">Ctrl+Enter</span>
-                </Button>
-              </div>
+              {!readOnly && (
+                <div className="flex items-center justify-end gap-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <Checkbox
+                      checked={ackEnabled}
+                      onCheckedChange={(v) => setAckEnabled(!!v)}
+                      disabled={!isConnected}
+                      className="h-3.5 w-3.5"
+                    />
+                    <span className="text-xs text-muted-foreground font-mono">ACK</span>
+                  </label>
+                  <Button
+                    onClick={handleSend}
+                    disabled={!isConnected || !config.messageContent.trim()}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                    size="sm"
+                  >
+                    Send <span className="ml-1 text-xs opacity-60">Ctrl+Enter</span>
+                  </Button>
+                </div>
+              )}
             </TabsContent>
 
             {/* Events tab */}
@@ -261,7 +269,8 @@ export function SocketBuilder({
                     <div key={event.id} className="flex items-center gap-2">
                       <Switch
                         checked={event.enabled}
-                        onCheckedChange={(checked) => updateEvent(event.id, { enabled: checked })}
+                        onCheckedChange={readOnly ? undefined : (checked) => updateEvent(event.id, { enabled: checked })}
+                        disabled={readOnly}
                         className="scale-75"
                       />
                       <Input
@@ -269,22 +278,27 @@ export function SocketBuilder({
                         onChange={(e) => updateEvent(event.id, { name: e.target.value })}
                         placeholder="Event name (e.g. chat, update)"
                         className="h-8 bg-secondary border-border text-sm font-mono flex-1"
+                        readOnly={readOnly}
                       />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => removeEvent(event.id)}
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {!readOnly && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeEvent(event.id)}
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   ))}
                 </div>
-                <Button variant="ghost" size="sm" onClick={addEvent} className="text-muted-foreground hover:text-foreground">
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Event
-                </Button>
+                {!readOnly && (
+                  <Button variant="ghost" size="sm" onClick={addEvent} className="text-muted-foreground hover:text-foreground">
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Event
+                  </Button>
+                )}
               </div>
             </TabsContent>
 
@@ -295,6 +309,7 @@ export function SocketBuilder({
                 onChange={(params) => onUpdate({ params })}
                 keyPlaceholder="Key"
                 valuePlaceholder="Value"
+                readOnly={readOnly}
               />
             </TabsContent>
 
@@ -305,6 +320,7 @@ export function SocketBuilder({
                 onChange={(headers) => onUpdate({ headers })}
                 keyPlaceholder="Header"
                 valuePlaceholder="Value"
+                readOnly={readOnly}
               />
             </TabsContent>
 
@@ -313,6 +329,7 @@ export function SocketBuilder({
               <AuthTab
                 auth={config.auth}
                 onChange={(auth: AuthConfig) => onUpdate({ auth })}
+                readOnly={readOnly}
               />
             </TabsContent>
           </Tabs>

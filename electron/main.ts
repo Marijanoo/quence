@@ -3,6 +3,18 @@ import * as path from 'path'
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
+import {
+  dbLogin, dbRegister, dbUserExists,
+  dbGetWorkspace, dbGetWorkspaces, dbCreateWorkspace, dbUpdateWorkspace, dbDeleteWorkspace,
+  dbGetCollections, dbGetCollection, dbCreateCollection, dbUpdateCollection, dbDeleteCollection,
+  dbGetRequests, dbGetRequest, dbCreateRequest, dbUpdateRequest, dbDeleteRequest,
+  dbGetSocketConfigs, dbCreateSocketConfig, dbUpdateSocketConfig, dbDeleteSocketConfig,
+  dbGetSequences, dbCreateSequence, dbUpdateSequence, dbDeleteSequence,
+  dbGetHistory, dbAddToHistory, dbClearHistory, dbDeleteHistoryEntry,
+  dbGetEnvironments, dbGetEnvironment, dbCreateEnvironment, dbUpdateEnvironment, dbDeleteEnvironment, dbSetActiveEnvironment,
+  dbGetWorkspaceState, dbSaveWorkspaceState,
+  dbGetInvitesForEmail, dbGetInvitesForWorkspace, dbSendInvite, dbDeleteInvite,
+} from './db'
 
 const isProd = process.env.NODE_ENV === 'production'
 
@@ -187,6 +199,65 @@ app.on('ready', () => {
     sockets.get(socketId)?.close()
     sockets.delete(socketId)
   })
+
+  // ── Database IPC ────────────────────────────────────────────────────────────
+  const handle = (ch: string, fn: (...args: any[]) => Promise<any>) =>
+    ipcMain.handle(ch, async (_e, ...args) => {
+      try { return { ok: true, data: await fn(...args) } }
+      catch (err: any) { return { ok: false, error: err.message ?? String(err) } }
+    })
+
+  handle('db:auth:login',       (email, password) => dbLogin(email, password))
+  handle('db:auth:register',    (id, email, name, password) => dbRegister(id, email, name, password))
+  handle('db:auth:userExists',  (id) => dbUserExists(id))
+
+  handle('db:workspaces:get',    (userId) => dbGetWorkspaces(userId))
+  handle('db:workspaces:getOne', (id) => dbGetWorkspace(id))
+  handle('db:workspaces:create', (ws) => dbCreateWorkspace(ws))
+  handle('db:workspaces:update', (id, data) => dbUpdateWorkspace(id, data))
+  handle('db:workspaces:delete', (id) => dbDeleteWorkspace(id))
+
+  handle('db:collections:get',    (workspaceId) => dbGetCollections(workspaceId))
+  handle('db:collections:getOne', (id) => dbGetCollection(id))
+  handle('db:collections:create', (c) => dbCreateCollection(c))
+  handle('db:collections:update', (id, data) => dbUpdateCollection(id, data))
+  handle('db:collections:delete', (id) => dbDeleteCollection(id))
+
+  handle('db:requests:get',    (collectionId) => dbGetRequests(collectionId))
+  handle('db:requests:getOne', (id) => dbGetRequest(id))
+  handle('db:requests:create', (r) => dbCreateRequest(r))
+  handle('db:requests:update', (id, data) => dbUpdateRequest(id, data))
+  handle('db:requests:delete', (id) => dbDeleteRequest(id))
+
+  handle('db:socketConfigs:get',    (collectionId) => dbGetSocketConfigs(collectionId))
+  handle('db:socketConfigs:create', (c) => dbCreateSocketConfig(c))
+  handle('db:socketConfigs:update', (id, data) => dbUpdateSocketConfig(id, data))
+  handle('db:socketConfigs:delete', (id) => dbDeleteSocketConfig(id))
+
+  handle('db:sequences:get',    (collectionId) => dbGetSequences(collectionId))
+  handle('db:sequences:create', (s) => dbCreateSequence(s))
+  handle('db:sequences:update', (id, data) => dbUpdateSequence(id, data))
+  handle('db:sequences:delete', (id) => dbDeleteSequence(id))
+
+  handle('db:history:get',         (workspaceId, limit) => dbGetHistory(workspaceId, limit))
+  handle('db:history:add',         (entry) => dbAddToHistory(entry))
+  handle('db:history:clear',       (workspaceId) => dbClearHistory(workspaceId))
+  handle('db:history:delete',      (id) => dbDeleteHistoryEntry(id))
+
+  handle('db:environments:get',       (workspaceId) => dbGetEnvironments(workspaceId))
+  handle('db:environments:getOne',    (id) => dbGetEnvironment(id))
+  handle('db:environments:create',    (env) => dbCreateEnvironment(env))
+  handle('db:environments:update',    (id, data) => dbUpdateEnvironment(id, data))
+  handle('db:environments:delete',    (id) => dbDeleteEnvironment(id))
+  handle('db:environments:setActive', (id, workspaceId) => dbSetActiveEnvironment(id, workspaceId))
+
+  handle('db:workspaceState:get',  (workspaceId) => dbGetWorkspaceState(workspaceId))
+  handle('db:workspaceState:save', (workspaceId, state) => dbSaveWorkspaceState(workspaceId, state))
+
+  handle('db:invites:forEmail',     (email) => dbGetInvitesForEmail(email))
+  handle('db:invites:forWorkspace', (workspaceId) => dbGetInvitesForWorkspace(workspaceId))
+  handle('db:invites:send',         (invite) => dbSendInvite(invite))
+  handle('db:invites:delete',       (id) => dbDeleteInvite(id))
 
   ipcMain.handle('make-request', async (_event, options) => {
     try {

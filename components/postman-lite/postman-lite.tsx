@@ -48,7 +48,11 @@ import { EnvironmentProvider } from './environment-context'
 import { TitleBar } from './title-bar'
 import { SettingsPanel } from './settings-panel'
 import { WorkspaceDropdown } from './workspace-dropdown'
-import { Save, PanelBottom, PanelRight, Settings2, ListOrdered } from 'lucide-react'
+import { WorkspaceInviteDialog } from './workspace-invite-dialog'
+import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
+import { useAuth } from '@/lib/auth/auth-context'
+import type { Workspace } from '@/lib/db/types'
+import { Save, PanelBottom, PanelRight, Settings2, ListOrdered, Users, UserPlus } from 'lucide-react'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -84,6 +88,9 @@ function friendlySocketError(message: string): string {
 }
 
 export function PostmanLite() {
+  const { state: authState } = useAuth()
+  const currentUser = authState.status === 'authenticated' ? authState.session.user : null
+
   const [isLoading, setIsLoading] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false)
@@ -96,6 +103,8 @@ export function PostmanLite() {
   const [saveCollectionId, setSaveCollectionId] = useState<string>('')
   const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
+  const [inviteDialogWorkspace, setInviteDialogWorkspace] = useState<Workspace | null>(null)
+  const [quickInviteWorkspace, setQuickInviteWorkspace] = useState<Workspace | null>(null)
 
   // Socket tab state (kept in memory only — not persisted to DB, connections are ephemeral)
   const [socketTabs, setSocketTabs] = useState<SocketTab[]>([])
@@ -117,19 +126,33 @@ export function PostmanLite() {
     activeWorkspace,
     activeWorkspaceId,
     isLoading: workspaceManagerLoading,
-    create: createWorkspace,
+    create: createWorkspaceRaw,
     rename: renameWorkspace,
     remove: removeWorkspace,
     switchTo: switchWorkspace,
+    update: updateWorkspace,
   } = useWorkspaceManager()
 
+  const createWorkspace = useCallback((name: string) => {
+    return createWorkspaceRaw(name, currentUser ?? undefined)
+  }, [createWorkspaceRaw, currentUser])
+
+  // Permission: owner always has write; members need read-write; no workspace = write (local)
+  const isOwner = !activeWorkspace
+    || activeWorkspace.ownerId === currentUser?.id
+    || activeWorkspace.ownerId === 'local'
+
+  const canWrite = isOwner
+    || activeWorkspace?.members.find(m => m.userId === currentUser?.id)?.permission === 'read-write'
+
   // Data hooks — all scoped to the active workspace
-  const { collections, create: createCollection, update: updateCollection, remove: removeCollection, importCollection, reorder: reorderCollections } = useCollections(activeWorkspaceId)
+  const safeWorkspaceId = workspaceManagerLoading ? null : activeWorkspaceId
+  const { collections, create: createCollection, update: updateCollection, remove: removeCollection, importCollection, reorder: reorderCollections } = useCollections(safeWorkspaceId)
   const { requests, create: createRequest, update: updateRequest, remove: removeRequest, refresh: refreshRequests, importRequests, reorderRequests } = useRequests()
   const { socketConfigs, create: createSocketConfig, update: dbUpdateSocketConfig, remove: removeSocketConfig, importSocketConfigs, refresh: refreshSocketConfigs } = useSocketConfigs()
   const { sequences, create: createSequence, update: updateSequence, remove: removeSequence } = useSequences()
-  const { history, add: addToHistory, remove: removeHistoryEntry, clear: clearHistory } = useHistory(activeWorkspaceId)
-  const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment } = useEnvironments(activeWorkspaceId)
+  const { history, add: addToHistory, remove: removeHistoryEntry, clear: clearHistory } = useHistory(safeWorkspaceId)
+  const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment } = useEnvironments(safeWorkspaceId)
   const {
     tabs,
     activeTab,
@@ -142,7 +165,7 @@ export function PostmanLite() {
     setActiveResponse,
     markTabSaved,
     reorderTabs,
-  } = useWorkspace(activeWorkspaceId)
+  } = useWorkspace(workspaceManagerLoading ? null : activeWorkspaceId)
 
   // Execute request
   const executeRequest = useCallback(async () => {
@@ -847,14 +870,15 @@ export function PostmanLite() {
       if (e.ctrlKey && !e.altKey && !e.metaKey) {
         if (e.key.toLowerCase() === 's') {
           e.preventDefault();
-          if (activeSocketTabId) openSaveSocketDialog(); else openSaveDialog();
+          if (canWrite) { if (activeSocketTabId) openSaveSocketDialog(); else openSaveDialog(); }
         } else if (e.key.toLowerCase() === 't') {
           e.preventDefault();
           createTab();
         } else if (e.key.toLowerCase() === 'w') {
           e.preventDefault();
-          if (activeTabId) {
-            handleCloseTab(activeTabId);
+          const activeId = activeSocketTabId ?? activeTabId;
+          if (activeId) {
+            handleUnifiedCloseTab(activeId);
           }
         } else if (e.key === 'Enter') {
           e.preventDefault();
@@ -881,7 +905,7 @@ export function PostmanLite() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTabId, activeSocketTabId, tabs, createTab, handleCloseTab, setActiveTab, openSaveDialog, openSaveSocketDialog, executeRequest]);
+  }, [canWrite, activeTabId, activeSocketTabId, tabs, createTab, handleCloseTab, handleUnifiedCloseTab, setActiveTab, openSaveDialog, openSaveSocketDialog, executeRequest]);
 
   // Import collection handler (also receives socket configs from Postman imports)
   const handleImportCollection = useCallback(async (collection: Collection, importedRequests: RequestConfig[], socketConfigs?: SocketConfig[]) => {
@@ -996,6 +1020,9 @@ export function PostmanLite() {
           onDelete={removeWorkspace}
           onExport={handleExportWorkspace}
           onImport={() => workspaceImportRef.current?.click()}
+          onManageAccess={ws => setInviteDialogWorkspace(ws)}
+          onUpdateWorkspace={updateWorkspace}
+          getWorkspace={(id) => workspaces.find(w => w.id === id)}
         />
         <input
           ref={workspaceImportRef}
@@ -1011,11 +1038,37 @@ export function PostmanLite() {
             activeEnvironment={activeEnvironment}
             onSelect={setActiveEnvironment}
           />
+          {activeWorkspace && isOwner && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => setInviteDialogWorkspace(activeWorkspace)}
+                title="Manage members"
+              >
+                <Users className="h-4 w-4" />
+                {(activeWorkspace.members?.length ?? 0) > 0 && (
+                  <span className="text-xs">{activeWorkspace.members.length}</span>
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => setQuickInviteWorkspace(activeWorkspace)}
+              >
+                <UserPlus className="h-4 w-4" />
+                Invite
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
             onClick={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
-            disabled={!activeTab && !activeSocketTab}
+            disabled={!canWrite || (!activeTab && !activeSocketTab)}
+            title={!canWrite ? 'Read-only access' : undefined}
           >
             <Save className="h-4 w-4 mr-2" />
             Save
@@ -1033,27 +1086,32 @@ export function PostmanLite() {
             history={history}
             environments={environments}
             activeEnvironment={activeEnvironment}
-            onCreateCollection={createCollection}
-            onDeleteCollection={removeCollection}
-            onRenameCollection={(id, name) => updateCollection(id, { name })}
-            onReorderCollections={reorderCollections}
-            onReorderRequests={reorderRequests}
+            canWrite={canWrite}
+            onCreateCollection={canWrite ? createCollection : () => {}}
+            onDeleteCollection={canWrite ? removeCollection : () => {}}
+            onRenameCollection={canWrite ? (id, name) => updateCollection(id, { name }) : () => {}}
+            onReorderCollections={canWrite ? reorderCollections : () => {}}
+            onReorderRequests={canWrite ? reorderRequests : () => {}}
+            onMoveRequest={canWrite ? (requestId, targetCollectionId) => updateRequest(requestId, { collectionId: targetCollectionId }) : () => {}}
             onOpenRequest={openRequest}
-            onDeleteRequest={removeRequest}
+            onDeleteRequest={canWrite ? removeRequest : () => {}}
             onSaveRequest={() => {}}
-            onImportCollection={handleImportCollection}
+            onImportCollection={canWrite ? handleImportCollection : () => {}}
             socketConfigs={socketConfigs}
             onOpenSocketConfig={openSocketConfig}
-            onDeleteSocketConfig={removeSocketConfig}
+            onDeleteSocketConfig={canWrite ? removeSocketConfig : () => {}}
             sequenceDragMode={isSequencesOpen}
             onOpenHistoryEntry={openHistoryEntry}
             onDeleteHistoryEntry={removeHistoryEntry}
             onClearHistory={clearHistory}
-            onCreateEnvironment={createEnvironment}
-            onImportEnvironment={importEnvironment}
-            onDeleteEnvironment={removeEnvironment}
-            onUpdateEnvironment={updateEnvironment}
+            onCreateEnvironment={canWrite ? createEnvironment : () => {}}
+            onImportEnvironment={canWrite ? importEnvironment : () => {}}
+            onDeleteEnvironment={canWrite ? removeEnvironment : () => {}}
+            onUpdateEnvironment={canWrite ? updateEnvironment : () => {}}
             onSetActiveEnvironment={setActiveEnvironment}
+            onInviteAccepted={(ws) => switchWorkspace(ws.id)}
+            onUpdateWorkspace={updateWorkspace}
+            getWorkspace={(id) => workspaces.find(w => w.id === id)}
           />
         </ResizablePanel>
 
@@ -1101,22 +1159,29 @@ export function PostmanLite() {
                   onDisconnect={() => disconnectSocket(activeSocketTab.id)}
                   onSendMessage={(event, data, type, ack) => sendSocketMessage(activeSocketTab.id, event, data, type, ack)}
                   onClearMessages={() => updateSocketTab(activeSocketTab.id, { messages: [] })}
+                  readOnly={!canWrite}
                 />
+              </div>
+            ) : !activeTab ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 text-muted-foreground">
+                <p className="text-sm">No open requests</p>
+                <Button variant="outline" size="sm" onClick={() => { setActiveSocketTabId(null); createTab() }}>
+                  New Request
+                </Button>
               </div>
             ) : (
               <>
                 {/* URL bar — spans full width above the split */}
-                {activeTab && (
-                  <UrlBar
-                    request={activeTab.request}
-                    onMethodChange={(method) => updateActiveRequest({ method })}
-                    onUrlChange={(url) => updateActiveRequest({ url })}
-                    onCurlImport={updateActiveRequest}
-                    onSend={executeRequest}
-                    onCancel={cancelRequest}
-                    isLoading={isLoading}
-                  />
-                )}
+                <UrlBar
+                  request={activeTab.request}
+                  onMethodChange={(method) => updateActiveRequest({ method })}
+                  onUrlChange={(url) => updateActiveRequest({ url })}
+                  onCurlImport={updateActiveRequest}
+                  onSend={executeRequest}
+                  onCancel={cancelRequest}
+                  isLoading={isLoading}
+                  readOnly={!canWrite}
+                />
 
                 {/* Request tabs and response viewer split */}
                 <ResizablePanelGroup
@@ -1125,15 +1190,14 @@ export function PostmanLite() {
                   className="flex-1"
                 >
                   <ResizablePanel defaultSize={50} minSize={30}>
-                    {activeTab && (
-                      <RequestBuilder
-                        request={activeTab.request}
-                        onUpdate={updateActiveRequest}
-                        onSend={executeRequest}
-                        isLoading={isLoading}
-                        hideUrlBar
-                      />
-                    )}
+                    <RequestBuilder
+                      request={activeTab.request}
+                      onUpdate={updateActiveRequest}
+                      onSend={executeRequest}
+                      isLoading={isLoading}
+                      hideUrlBar
+                      readOnly={!canWrite}
+                    />
                   </ResizablePanel>
 
                   <ResizableHandle className={responseLayout === 'side' ? 'w-px bg-border' : 'h-px bg-border'} />
@@ -1197,6 +1261,24 @@ export function PostmanLite() {
       </div>
 
       <SettingsPanel open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+
+      {inviteDialogWorkspace && (
+        <WorkspaceInviteDialog
+          open={!!inviteDialogWorkspace}
+          onOpenChange={open => { if (!open) setInviteDialogWorkspace(null) }}
+          workspace={inviteDialogWorkspace}
+          onUpdateWorkspace={updateWorkspace}
+        />
+      )}
+
+      {quickInviteWorkspace && (
+        <WorkspaceQuickInviteDialog
+          open={!!quickInviteWorkspace}
+          onOpenChange={open => { if (!open) setQuickInviteWorkspace(null) }}
+          workspace={quickInviteWorkspace}
+          onUpdateWorkspace={updateWorkspace}
+        />
+      )}
 
       {/* Save Request Dialog */}
       <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
