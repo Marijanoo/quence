@@ -8,8 +8,11 @@
     "start": "next start",
     "lint": "eslint .",
     "build:electron": "tsc -p electron/tsconfig.json",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:3000 && npm run build:electron && electron .\"",
-    "electron:build": "npm run build && npm run build:electron && electron-builder"
+    "electron:dev": "concurrently --kill-others \"npm run dev\" \"wait-on tcp:3000 && npm run build:electron && electron .\"",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "electron:build": "npm run build && npm run build:electron && electron-builder",
+    "build:electron-win": "npm run build && npm run build:electron && electron-builder --win",
+    "build:electron-mac": "npm run build && npm run build:electron && electron-builder --mac"
   },
   "build": {
     "appId": "com.postmanlite.app",
@@ -20,13 +23,23 @@
     "files": [
       "dist-electron/**/*",
       "out/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
     ],
     "mac": {
       "target": "dmg"
     },
     "win": {
-      "target": "portable"
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "linux": {
       "target": "AppImage"
@@ -65,11 +78,12 @@
     "@types/ws": "^8.18.1",
     "@vercel/analytics": "1.6.1",
     "autoprefixer": "^10.4.20",
+    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.1.1",
     "date-fns": "4.1.0",
-    "electron-serve": "^3.0.1",
+    "electron-serve": "^1.1.0",
     "embla-carousel-react": "8.6.0",
     "idb": "^8.0.3",
     "input-otp": "1.4.2",
@@ -93,13 +107,15 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "@tailwindcss/postcss": "^4.2.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/uuid": "^11.0.0",
     "concurrently": "^9.2.1",
-    "electron": "^42.0.1",
+    "electron": "^34.5.8",
     "electron-builder": "^26.8.1",
     "postcss": "^8.5",
     "tailwindcss": "^4.2.0",

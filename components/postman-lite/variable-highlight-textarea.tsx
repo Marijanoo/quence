@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 
 import type { EnvironmentVariable } from '@/lib/db/types'
 import { cn } from '@/lib/utils'
+import { computeFoldRanges, computeHiddenLines, foldSummary } from '@/lib/json-fold'
 import {
   Popover,
   PopoverContent,
@@ -31,21 +32,23 @@ function tokenizeLine(line: string): React.ReactNode {
     if (!token) continue
 
     if (token.startsWith('"')) {
-      // Key if the next meaningful token is ':'
-      const next = parts[i + 1] ?? ''
-      if (next.trimStart().startsWith(':')) {
-        nodes.push(<span key={i} className="key">{token}</span>)
+      // Key if the next non-empty token is ':'
+      let j = i + 1
+      while (j < parts.length && parts[j].trim() === '') j++
+      const nextToken = parts[j] ?? ''
+      if (nextToken === ':') {
+        nodes.push(<span key={i} style={{ color: 'var(--json-key)' }}>{token}</span>)
       } else {
-        nodes.push(<span key={i} className="string">{token}</span>)
+        nodes.push(<span key={i} style={{ color: 'var(--json-string)' }}>{token}</span>)
       }
     } else if (/^-?\d/.test(token)) {
-      nodes.push(<span key={i} className="number">{token}</span>)
+      nodes.push(<span key={i} style={{ color: 'var(--json-number)' }}>{token}</span>)
     } else if (token === 'true' || token === 'false') {
-      nodes.push(<span key={i} className="boolean">{token}</span>)
+      nodes.push(<span key={i} style={{ color: 'var(--json-boolean)' }}>{token}</span>)
     } else if (token === 'null') {
-      nodes.push(<span key={i} className="null">{token}</span>)
+      nodes.push(<span key={i} style={{ color: 'var(--muted-foreground)' }}>{token}</span>)
     } else if (/^[:,{}\[\]]$/.test(token)) {
-      nodes.push(<span key={i} className="punctuation">{token}</span>)
+      nodes.push(<span key={i} style={{ color: 'var(--muted-foreground)' }}>{token}</span>)
     } else {
       nodes.push(<span key={i}>{token}</span>)
     }
@@ -245,6 +248,7 @@ export function VariableHighlightTextarea({
   readOnly,
 }: VariableHighlightTextareaProps) {
   const [localValue, setLocalValue] = useState(value)
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)   // the scrolling container
   const gutterRef = useRef<HTMLDivElement>(null)
@@ -396,6 +400,17 @@ export function VariableHighlightTextarea({
   const lines = localValue.split('\n')
   const lineCount = lines.length
 
+  // ── JSON folding (only when language === 'json') ──────────────────────────
+  const foldRanges = useMemo(() => language === 'json' ? computeFoldRanges(lines) : new Map<number, number>(), [localValue, language])
+  const hiddenLines = useMemo(() => computeHiddenLines(collapsed, foldRanges, lineCount), [collapsed, foldRanges, lineCount])
+  const toggleFold = useCallback((i: number) => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i); else next.add(i)
+      return next
+    })
+  }, [])
+
   // ── Line position tracking for wrapped lines ─────────────────────────────
   // Each entry: { top: offsetTop relative to overlay content, height: offsetHeight }
   const [linePositions, setLinePositions] = useState<{ top: number; height: number }[]>([])
@@ -529,7 +544,7 @@ export function VariableHighlightTextarea({
   }
 
   // ── Gutter width ─────────────────────────────────────────────────────────
-  const gutterWidth = Math.max(String(lineCount).length, 2) * 9 + 28
+  const gutterWidth = Math.max(String(lineCount).length, 2) * 9 + (language === 'json' ? 38 : 28)
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -575,17 +590,26 @@ export function VariableHighlightTextarea({
           />
 
           {/* Per-line highlighted content */}
-          {lines.map((line, i) => (
-            <div
-              key={i}
-              ref={el => { lineRefs.current[i] = el }}
-              style={{ lineHeight: `${LINE_HEIGHT}px`, minHeight: `${LINE_HEIGHT}px`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', position: 'relative', zIndex: 1 }}
-            >
-              {localValue === '' && i === 0
-                ? <span style={{ color: 'var(--muted-foreground)' }}>{placeholder}</span>
-                : renderLineContent({ text: line, language, variables, onUpdateVariable })}
-            </div>
-          ))}
+          {lines.map((line, i) => {
+            if (hiddenLines.has(i)) return null
+            const isCollapsed = collapsed.has(i)
+            const closer = foldRanges.get(i)
+            const displayLine = isCollapsed && closer !== undefined
+              ? foldSummary(line, lines[closer], closer - i - 1)
+              : line
+            return (
+              <div
+                key={i}
+                ref={el => { lineRefs.current[i] = el }}
+                style={{ lineHeight: `${LINE_HEIGHT}px`, minHeight: `${LINE_HEIGHT}px`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', position: 'relative', zIndex: 1 }}
+                onClick={isCollapsed ? () => toggleFold(i) : undefined}
+              >
+                {localValue === '' && i === 0
+                  ? <span style={{ color: 'var(--muted-foreground)' }}>{placeholder}</span>
+                  : renderLineContent({ text: displayLine, language, variables, onUpdateVariable })}
+              </div>
+            )
+          })}
 
           {/* Search match highlight layer */}
           {searchOpen && searchQuery && (
@@ -602,9 +626,12 @@ export function VariableHighlightTextarea({
           style={{ width: gutterWidth, background: 'var(--background)', zIndex: 3 }}
         >
           {lines.map((_, i) => {
+            if (hiddenLines.has(i)) return null
             const pos = linePositions[i]
             const top = (pos ? pos.top : i * LINE_HEIGHT + 12) - scrollTop
             const height = pos?.height ?? LINE_HEIGHT
+            const isFoldable = foldRanges.has(i)
+            const isCollapsed = collapsed.has(i)
             return (
               <div
                 key={i}
@@ -617,14 +644,21 @@ export function VariableHighlightTextarea({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'flex-end',
-                  paddingRight: 10,
+                  paddingRight: 4,
                   paddingLeft: 6,
                   color: i === activeLine ? 'var(--foreground)' : 'var(--muted-foreground)',
                   background: i === activeLine ? 'var(--secondary)' : 'transparent',
                   transition: 'background 0.05s',
+                  gap: 2,
+                  pointerEvents: isFoldable ? 'auto' : 'none',
+                  cursor: isFoldable ? 'pointer' : 'default',
                 }}
+                onClick={isFoldable ? () => toggleFold(i) : undefined}
               >
-                {i + 1}
+                <span style={{ fontSize: 9, lineHeight: 1, opacity: isFoldable ? 1 : 0 }}>
+                  {isCollapsed ? '▶' : '▼'}
+                </span>
+                <span style={{ minWidth: 18, textAlign: 'right' }}>{i + 1}</span>
               </div>
             )
           })}

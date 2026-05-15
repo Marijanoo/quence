@@ -15,6 +15,8 @@ interface Props {
   onDelete: (id: string) => void
   onExport: (id: string) => void
   onImport: () => void
+  onExportAll: () => void
+  onImportAll: () => void
   onManageAccess: (workspace: Workspace) => void
   onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
   getWorkspace: (id: string) => Workspace | undefined
@@ -29,6 +31,8 @@ export function WorkspaceDropdown({
   onDelete,
   onExport,
   onImport,
+  onExportAll,
+  onImportAll,
   onManageAccess,
   onUpdateWorkspace,
   getWorkspace,
@@ -299,6 +303,21 @@ export function WorkspaceDropdown({
                 >
                   <Upload className="h-3.5 w-3.5" />
                   Import Workspace
+                </button>
+                <div className="mx-3 my-1 border-t border-border" />
+                <button
+                  onClick={() => { setOpen(false); onExportAll() }}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export All Data
+                </button>
+                <button
+                  onClick={() => { setOpen(false); onImportAll() }}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import All Data
                 </button>
               </>
             )}

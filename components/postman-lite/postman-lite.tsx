@@ -47,12 +47,15 @@ import { EnvironmentSelector } from './environment-selector'
 import { EnvironmentProvider } from './environment-context'
 import { TitleBar } from './title-bar'
 import { SettingsPanel } from './settings-panel'
+import { JwtDecoder } from './jwt-decoder-panel'
+import { JsonFormatter } from './json-formatter-panel'
+import { TextDiff } from './text-diff-panel'
 import { WorkspaceDropdown } from './workspace-dropdown'
 import { WorkspaceInviteDialog } from './workspace-invite-dialog'
 import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
 import { useAuth } from '@/lib/auth/auth-context'
 import type { Workspace } from '@/lib/db/types'
-import { Save, PanelBottom, PanelRight, Settings2, ListOrdered, Users, UserPlus } from 'lucide-react'
+import { Save, PanelBottom, PanelRight, Settings2, ListOrdered, Users, UserPlus, KeyRound, Braces, GitCompare } from 'lucide-react'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -114,8 +117,17 @@ export function PostmanLite() {
 
   const activeSocketTab = socketTabs.find(t => t.id === activeSocketTabId) ?? null
 
+  // Per-tab active request panel (params/headers/body/auth)
+  const [requestTabMap, setRequestTabMap] = useState<Record<string, string>>({})
+
+  // Tool panel state (persisted across tab switches)
+  const [jwtToken, setJwtToken] = useState('')
+  const [jsonInput, setJsonInput] = useState('')
+  const [diffText1, setDiffText1] = useState('')
+  const [diffText2, setDiffText2] = useState('')
+
   // Sequence state
-  const [isSequencesOpen, setIsSequencesOpen] = useState(false)
+  const [activeView, setActiveView] = useState<'requests' | 'sequences' | 'jwt' | 'json' | 'diff'>('requests')
   const [runningSequenceId, setRunningSequenceId] = useState<string | null>(null)
   const [stepResults, setStepResults] = useState<Record<string, SequenceStepResult>>({})
   const sequenceAbortRef = useRef<boolean>(false)
@@ -991,6 +1003,91 @@ export function PostmanLite() {
     window.location.reload()
   }, [])
 
+  // Export all account data
+  const handleExportAll = useCallback(async () => {
+    const { getDatabase } = await import('@/lib/db')
+    const db = await getDatabase()
+    const allWorkspaces = await db.getWorkspaces()
+    const allCollections = await db.getCollections()
+    const allRequests: RequestConfig[] = []
+    for (const col of allCollections) {
+      const reqs = await db.getRequests(col.id)
+      allRequests.push(...reqs)
+    }
+    const allEnvironments = await db.getEnvironments()
+    const allSocketConfigs = await db.getSocketConfigs()
+    const allSequences = await db.getSequences()
+    const payload = {
+      version: 2,
+      exportedAt: Date.now(),
+      workspaces: allWorkspaces,
+      collections: allCollections,
+      requests: allRequests,
+      environments: allEnvironments,
+      socketConfigs: allSocketConfigs,
+      sequences: allSequences,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `postman-lite-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  // Import all account data
+  const allDataImportRef = useRef<HTMLInputElement>(null)
+  const handleImportAllFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (allDataImportRef.current) allDataImportRef.current.value = ''
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      if (data.version !== 2 || !Array.isArray(data.workspaces)) {
+        alert('Invalid export file. Please use a file created by "Export All Data".')
+        return
+      }
+      const { getDatabase } = await import('@/lib/db')
+      const db = await getDatabase()
+      // Map old IDs → new IDs to relink everything
+      const wsIdMap: Record<string, string> = {}
+      const colIdMap: Record<string, string> = {}
+      const now = Date.now()
+      for (const ws of data.workspaces) {
+        const newId = generateId()
+        wsIdMap[ws.id] = newId
+        await db.createWorkspace({ ...ws, id: newId, name: `${ws.name} (imported)`, createdAt: now, updatedAt: now })
+      }
+      for (const col of (data.collections ?? [])) {
+        const newId = generateId()
+        colIdMap[col.id] = newId
+        const newWsId = col.workspaceId ? (wsIdMap[col.workspaceId] ?? col.workspaceId) : undefined
+        await db.createCollection({ ...col, id: newId, workspaceId: newWsId })
+      }
+      for (const req of (data.requests ?? [])) {
+        const newColId = req.collectionId ? (colIdMap[req.collectionId] ?? req.collectionId) : undefined
+        await db.createRequest({ ...req, id: generateId(), collectionId: newColId })
+      }
+      for (const env of (data.environments ?? [])) {
+        const newWsId = env.workspaceId ? (wsIdMap[env.workspaceId] ?? env.workspaceId) : undefined
+        await db.createEnvironment({ ...env, id: generateId(), workspaceId: newWsId, isActive: false })
+      }
+      for (const sc of (data.socketConfigs ?? [])) {
+        const newColId = sc.collectionId ? (colIdMap[sc.collectionId] ?? sc.collectionId) : undefined
+        await db.createSocketConfig({ ...sc, id: generateId(), collectionId: newColId })
+      }
+      for (const seq of (data.sequences ?? [])) {
+        const newColId = seq.collectionId ? (colIdMap[seq.collectionId] ?? seq.collectionId) : undefined
+        await db.createSequence({ ...seq, id: generateId(), collectionId: newColId })
+      }
+      window.location.reload()
+    } catch {
+      alert('Failed to import data. Please ensure the file is a valid export.')
+    }
+  }, [])
+
   if (workspaceManagerLoading || workspaceLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -1020,6 +1117,8 @@ export function PostmanLite() {
           onDelete={removeWorkspace}
           onExport={handleExportWorkspace}
           onImport={() => workspaceImportRef.current?.click()}
+          onExportAll={handleExportAll}
+          onImportAll={() => allDataImportRef.current?.click()}
           onManageAccess={ws => setInviteDialogWorkspace(ws)}
           onUpdateWorkspace={updateWorkspace}
           getWorkspace={(id) => workspaces.find(w => w.id === id)}
@@ -1031,6 +1130,13 @@ export function PostmanLite() {
           multiple
           className="hidden"
           onChange={handleImportWorkspaceFile}
+        />
+        <input
+          ref={allDataImportRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={handleImportAllFile}
         />
         <div className="flex items-center gap-2">
           <EnvironmentSelector
@@ -1100,7 +1206,7 @@ export function PostmanLite() {
             socketConfigs={socketConfigs}
             onOpenSocketConfig={openSocketConfig}
             onDeleteSocketConfig={canWrite ? removeSocketConfig : () => {}}
-            sequenceDragMode={isSequencesOpen}
+            sequenceDragMode={activeView === 'sequences'}
             onOpenHistoryEntry={openHistoryEntry}
             onDeleteHistoryEntry={removeHistoryEntry}
             onClearHistory={clearHistory}
@@ -1121,8 +1227,7 @@ export function PostmanLite() {
         <ResizablePanel defaultSize={80}>
           <div className="flex flex-col h-full">
 
-            {/* Sequences view — replaces request/response when open */}
-            {isSequencesOpen ? (
+            {activeView === 'sequences' ? (
               <SequenceBuilder
                 sequences={sequences}
                 onCreateSequence={createSequence}
@@ -1133,6 +1238,12 @@ export function PostmanLite() {
                 runningSequenceId={runningSequenceId}
                 stepResults={stepResults}
               />
+            ) : activeView === 'jwt' ? (
+              <JwtDecoder token={jwtToken} onTokenChange={setJwtToken} />
+            ) : activeView === 'json' ? (
+              <JsonFormatter input={jsonInput} onInputChange={setJsonInput} />
+            ) : activeView === 'diff' ? (
+              <TextDiff text1={diffText1} onText1Change={setDiffText1} text2={diffText2} onText2Change={setDiffText2} />
             ) : (
             <>
             {/* Tab bar */}
@@ -1197,6 +1308,8 @@ export function PostmanLite() {
                       isLoading={isLoading}
                       hideUrlBar
                       readOnly={!canWrite}
+                      activeRequestTab={requestTabMap[activeTabId!] ?? 'params'}
+                      onRequestTabChange={(tab) => setRequestTabMap(prev => ({ ...prev, [activeTabId!]: tab }))}
                     />
                   </ResizablePanel>
 
@@ -1234,10 +1347,22 @@ export function PostmanLite() {
 
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setIsSequencesOpen(o => !o)}
+            onClick={() => setActiveView('requests')}
+            title="Requests"
+            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+              activeView === 'requests'
+                ? 'text-foreground bg-accent/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+            }`}
+          >
+            <PanelRight className="h-3.5 w-3.5" />
+            <span>Requests</span>
+          </button>
+          <button
+            onClick={() => setActiveView('sequences')}
             title="Sequences"
             className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              isSequencesOpen
+              activeView === 'sequences'
                 ? 'text-foreground bg-accent/20'
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
             }`}
@@ -1245,23 +1370,56 @@ export function PostmanLite() {
             <ListOrdered className="h-3.5 w-3.5" />
             <span>Sequences</span>
           </button>
-          {!isSequencesOpen && (
-            <button
-              onClick={() => setResponseLayout(l => l === 'side' ? 'bottom' : 'side')}
-              title={responseLayout === 'side' ? 'Move response to bottom' : 'Move response to side'}
-              className="flex items-center gap-1.5 px-2 h-5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-            >
-              {responseLayout === 'side'
-                ? <PanelBottom className="h-3.5 w-3.5" />
-                : <PanelRight className="h-3.5 w-3.5" />}
-              <span>{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
-            </button>
-          )}
+          <button
+            onClick={() => setActiveView('jwt')}
+            title="JWT Decoder"
+            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+              activeView === 'jwt'
+                ? 'text-foreground bg-accent/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+            }`}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            <span>JWT</span>
+          </button>
+          <button
+            onClick={() => setActiveView('json')}
+            title="JSON Formatter"
+            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+              activeView === 'json'
+                ? 'text-foreground bg-accent/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+            }`}
+          >
+            <Braces className="h-3.5 w-3.5" />
+            <span>JSON</span>
+          </button>
+          <button
+            onClick={() => setActiveView('diff')}
+            title="Text Compare"
+            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+              activeView === 'diff'
+                ? 'text-foreground bg-accent/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+            }`}
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+            <span>Diff</span>
+          </button>
+          <button
+            onClick={() => setResponseLayout(l => l === 'side' ? 'bottom' : 'side')}
+            title={responseLayout === 'side' ? 'Move response to bottom' : 'Move response to side'}
+            className="flex items-center gap-1.5 px-2 h-5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+          >
+            {responseLayout === 'side'
+              ? <PanelBottom className="h-3.5 w-3.5" />
+              : <PanelRight className="h-3.5 w-3.5" />}
+            <span>{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
+          </button>
         </div>
       </div>
 
       <SettingsPanel open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-
       {inviteDialogWorkspace && (
         <WorkspaceInviteDialog
           open={!!inviteDialogWorkspace}

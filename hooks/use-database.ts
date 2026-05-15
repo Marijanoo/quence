@@ -24,6 +24,21 @@ import { useAuth } from '@/lib/auth/auth-context'
 
 const ACTIVE_WORKSPACE_KEY = 'postman-lite-active-workspace'
 
+// Compare two requests ignoring volatile fields that change on every edit
+function requestsEqual(a: RequestConfig, b: RequestConfig): boolean {
+  const strip = (r: RequestConfig) => {
+    const { id: _id, updatedAt: _u, createdAt: _c, ...rest } = r
+    return rest
+  }
+  // Use a replacer that sorts keys so key-insertion-order differences don't matter
+  const stable = (v: unknown) => JSON.stringify(v, (_, val) =>
+    val && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => a.localeCompare(b)))
+      : val
+  )
+  return stable(strip(a)) === stable(strip(b))
+}
+
 // Generic database hook (shared singleton)
 function useDatabase() {
   const { state } = useAuth()
@@ -476,7 +491,7 @@ export function useWorkspace(workspaceId?: string | null) {
             if (!tab.requestId) return tab
             const fresh = await db.getRequest(tab.requestId)
             if (!fresh) return tab
-            return { ...tab, request: fresh, isDirty: false }
+            return { ...tab, request: fresh, savedRequest: fresh, isDirty: false }
           })
         )
         setState({ ...saved, tabs: hydratedTabs })
@@ -514,10 +529,12 @@ export function useWorkspace(workspaceId?: string | null) {
   const activeTab = state.tabs.find(t => t.id === state.activeTabId)
 
   const createTab = useCallback(async (request?: RequestConfig, requestId?: string) => {
+    const resolvedRequest = request || createNewRequest()
     const newTab: WorkspaceTab = {
       id: generateId(),
       requestId,
-      request: request || createNewRequest(),
+      request: resolvedRequest,
+      savedRequest: requestId ? resolvedRequest : undefined,
       response: null,
       isDirty: false,
     }
@@ -548,10 +565,9 @@ export function useWorkspace(workspaceId?: string | null) {
 
   const updateActiveRequest = useCallback(async (updates: Partial<RequestConfig>) => {
     if (!activeTab) return
-    await updateTab(activeTab.id, {
-      request: { ...activeTab.request, ...updates, updatedAt: Date.now() },
-      isDirty: true,
-    })
+    const updatedRequest = { ...activeTab.request, ...updates, updatedAt: Date.now() }
+    const isDirty = !activeTab.savedRequest || !requestsEqual(updatedRequest, activeTab.savedRequest)
+    await updateTab(activeTab.id, { request: updatedRequest, isDirty })
   }, [activeTab, updateTab])
 
   const setActiveResponse = useCallback(async (response: ResponseData | null) => {
@@ -560,8 +576,9 @@ export function useWorkspace(workspaceId?: string | null) {
   }, [activeTab, updateTab])
 
   const markTabSaved = useCallback(async (tabId: string, requestId: string) => {
-    await updateTab(tabId, { requestId, isDirty: false })
-  }, [updateTab])
+    const tab = state.tabs.find(t => t.id === tabId)
+    await updateTab(tabId, { requestId, savedRequest: tab?.request, isDirty: false })
+  }, [state.tabs, updateTab])
 
   const reorderTabs = useCallback(async (reordered: WorkspaceTab[]) => {
     await saveState({ ...state, tabs: reordered })

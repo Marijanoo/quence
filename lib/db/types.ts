@@ -196,6 +196,7 @@ export interface WorkspaceTab {
   id: string
   requestId?: string // If saved to a collection
   request: RequestConfig
+  savedRequest?: RequestConfig // Snapshot at last save — used to detect real changes
   response: ResponseData | null
   isDirty: boolean
 }

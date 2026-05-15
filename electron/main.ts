@@ -14,9 +14,9 @@ import {
   dbGetEnvironments, dbGetEnvironment, dbCreateEnvironment, dbUpdateEnvironment, dbDeleteEnvironment, dbSetActiveEnvironment,
   dbGetWorkspaceState, dbSaveWorkspaceState,
   dbGetInvitesForEmail, dbGetInvitesForWorkspace, dbSendInvite, dbDeleteInvite,
-} from './db'
+} from './sqlite-db'
 
-const isProd = process.env.NODE_ENV === 'production'
+const isProd = app.isPackaged || process.env.NODE_ENV === 'production'
 
 if (isProd) {
   serve({ directory: 'out' })
