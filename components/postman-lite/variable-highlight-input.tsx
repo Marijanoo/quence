@@ -12,6 +12,7 @@ interface VariableHighlightInputProps {
   value: string
   onChange: (value: string) => void
   onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void
+  onEnter?: () => void
   placeholder?: string
   className?: string
   variables: EnvironmentVariable[]
@@ -46,6 +47,7 @@ export function VariableHighlightInput({
   value,
   onChange,
   onPaste,
+  onEnter,
   placeholder,
   className,
   variables,
@@ -291,6 +293,7 @@ export function VariableHighlightInput({
 
     if (e.key === 'Enter') {
       handleChange(localValue, true)
+      onEnter?.()
     }
   }
 

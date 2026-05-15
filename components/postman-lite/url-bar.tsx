@@ -31,12 +31,12 @@ interface UrlBarProps {
 const methods: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 
 const methodColors: Record<HttpMethod, string> = {
-  GET: 'text-[oklch(0.72_0.19_160)]',
-  POST: 'text-[oklch(0.75_0.18_80)]',
-  PUT: 'text-[oklch(0.65_0.2_250)]',
-  PATCH: 'text-[oklch(0.7_0.15_300)]',
-  DELETE: 'text-[oklch(0.65_0.22_25)]',
-  HEAD: 'text-[oklch(0.6_0.12_200)]',
+  GET: 'text-[oklch(0.88_0.15_140)]',
+  POST: 'text-[oklch(0.88_0.14_75)]',
+  PUT: 'text-[oklch(0.88_0.13_240)]',
+  PATCH: 'text-[oklch(0.88_0.13_300)]',
+  DELETE: 'text-[oklch(0.88_0.14_15)]',
+  HEAD: 'text-[oklch(0.88_0.11_195)]',
   OPTIONS: 'text-muted-foreground',
 }
 
@@ -109,6 +109,7 @@ export function UrlBar({
           value={url}
           onChange={readOnly ? () => {} : onUrlChange}
           onPaste={readOnly ? undefined : handlePaste}
+          onEnter={readOnly ? undefined : onSend}
           placeholder="Enter request URL or paste a curl command"
           className={cn('bg-secondary border-border', readOnly && 'opacity-70 cursor-default')}
           variables={variables}

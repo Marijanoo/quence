@@ -15,6 +15,7 @@ import {
   useWorkspace,
 } from '@/hooks/use-database'
 import { parseVariables } from '@/lib/variable-parser'
+import { splitUrl, searchToParams } from '@/lib/url-params'
 import {
   ResizableHandle,
   ResizablePanel,
@@ -96,6 +97,8 @@ export function PostmanLite() {
 
   const [isLoading, setIsLoading] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const requestGenerationRef = useRef(0)
+  const activeElectronRequestIdRef = useRef<string | null>(null)
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false)
   const [isSaveSocketDialogOpen, setIsSaveSocketDialogOpen] = useState(false)
   const [saveSocketName, setSaveSocketName] = useState('')
@@ -131,6 +134,8 @@ export function PostmanLite() {
   const [runningSequenceId, setRunningSequenceId] = useState<string | null>(null)
   const [stepResults, setStepResults] = useState<Record<string, SequenceStepResult>>({})
   const sequenceAbortRef = useRef<boolean>(false)
+  const sequenceControllerRef = useRef<AbortController | null>(null)
+  const sequenceElectronRequestIdRef = useRef<string | null>(null)
 
   // Workspace manager
   const {
@@ -183,6 +188,14 @@ export function PostmanLite() {
   const executeRequest = useCallback(async () => {
     if (!activeTab) return
 
+    // Cancel any in-flight request before starting a new one
+    abortControllerRef.current?.abort()
+    if (activeElectronRequestIdRef.current && window.electronAPI?.cancelRequest) {
+      window.electronAPI.cancelRequest(activeElectronRequestIdRef.current)
+      activeElectronRequestIdRef.current = null
+    }
+
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -257,13 +270,19 @@ export function PostmanLite() {
       let responseData: ResponseData;
 
       if (typeof window !== 'undefined' && window.electronAPI) {
-        // Use Electron IPC
-        responseData = await window.electronAPI.makeRequest({
+        // Use Electron IPC — pass a requestId so the main process can abort it
+        const requestId = generateId()
+        activeElectronRequestIdRef.current = requestId
+        const result = await window.electronAPI.makeRequest({
           url,
           method: request.method,
           headers,
           requestBody,
-        });
+          requestId,
+        })
+        activeElectronRequestIdRef.current = null
+        if (result?.aborted || generation !== requestGenerationRef.current) return
+        responseData = result
       } else {
         // Make request through Next.js proxy
         const response = await fetch('/api/proxy', {
@@ -278,8 +297,11 @@ export function PostmanLite() {
           }),
           signal: controller.signal,
         })
+        if (generation !== requestGenerationRef.current) return
         responseData = await response.json()
       }
+
+      if (generation !== requestGenerationRef.current) return
 
       // Update tab with response
       await setActiveResponse(responseData)
@@ -295,6 +317,7 @@ export function PostmanLite() {
       await addToHistory(historyEntry)
 
     } catch (error) {
+      if (generation !== requestGenerationRef.current) return
       if (error instanceof Error && error.name === 'AbortError') {
         setIsLoading(false)
         return
@@ -312,18 +335,26 @@ export function PostmanLite() {
       }
       await setActiveResponse(errorResponse)
     } finally {
-      abortControllerRef.current = null
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current) {
+        abortControllerRef.current = null
+        setIsLoading(false)
+      }
     }
   }, [activeTab, activeEnvironment, setActiveResponse, addToHistory])
 
   const cancelRequest = useCallback(() => {
+    requestGenerationRef.current++ // invalidate any in-flight response
     abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    if (activeElectronRequestIdRef.current && window.electronAPI?.cancelRequest) {
+      window.electronAPI.cancelRequest(activeElectronRequestIdRef.current)
+      activeElectronRequestIdRef.current = null
+    }
     setIsLoading(false)
   }, [])
 
   // Standalone request runner used by sequences (does not touch tab state)
-  const runSingleRequest = useCallback(async (request: RequestConfig): Promise<ResponseData> => {
+  const runSingleRequest = useCallback(async (request: RequestConfig, signal?: AbortSignal): Promise<ResponseData> => {
     const envVariables = activeEnvironment?.variables || []
     let url = parseVariables(request.url, envVariables)
     const enabledParams = request.params.filter(p => p.enabled && p.key)
@@ -369,12 +400,18 @@ export function PostmanLite() {
       }
     }
     if (typeof window !== 'undefined' && window.electronAPI) {
-      return window.electronAPI.makeRequest({ url, method: request.method, headers, requestBody })
+      const requestId = generateId()
+      sequenceElectronRequestIdRef.current = requestId
+      const result = await window.electronAPI.makeRequest({ url, method: request.method, headers, requestBody, requestId })
+      sequenceElectronRequestIdRef.current = null
+      if (result?.aborted || signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      return result
     }
     const res = await fetch('/api/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, method: request.method, headers, requestBody, formDataEntries }),
+      signal,
     })
     return res.json()
   }, [activeEnvironment])
@@ -382,6 +419,8 @@ export function PostmanLite() {
   const executeSequence = useCallback(async (seq: Sequence) => {
     setRunningSequenceId(seq.id)
     sequenceAbortRef.current = false
+    const controller = new AbortController()
+    sequenceControllerRef.current = controller
     const initialResults: Record<string, SequenceStepResult> = {}
     seq.steps.forEach(s => { initialResults[s.id] = { stepId: s.id, status: 'idle' } })
     setStepResults(initialResults)
@@ -389,7 +428,7 @@ export function PostmanLite() {
     let lastResponseBody: string | null = null
 
     for (const step of seq.steps) {
-      if (sequenceAbortRef.current) {
+      if (sequenceAbortRef.current || controller.signal.aborted) {
         setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
         continue
       }
@@ -436,26 +475,41 @@ export function PostmanLite() {
       }
       const start = Date.now()
       try {
-        const response = await runSingleRequest(fullRequest)
+        const response = await runSingleRequest(fullRequest, controller.signal)
         const duration = Date.now() - start
+        if (controller.signal.aborted) {
+          setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
+          continue
+        }
         lastResponseBody = response.body
         const ok = response.status >= 200 && response.status < 300
         setStepResults(prev => ({
           ...prev,
-          [step.id]: { stepId: step.id, status: ok ? 'success' : 'error', statusCode: response.status, statusText: response.statusText, duration },
+          [step.id]: { stepId: step.id, status: ok ? 'success' : 'error', statusCode: response.status, statusText: response.statusText, duration, response },
         }))
       } catch (err) {
         const duration = Date.now() - start
+        if (err instanceof Error && err.name === 'AbortError') {
+          setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
+          continue
+        }
         const msg = err instanceof Error ? err.message : 'Unknown error'
         lastResponseBody = null
         setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: friendlyNetworkError(msg), duration } }))
       }
     }
+    sequenceControllerRef.current = null
     setRunningSequenceId(null)
   }, [requests, runSingleRequest, activeEnvironment, updateEnvironment])
 
   const stopSequence = useCallback(() => {
     sequenceAbortRef.current = true
+    sequenceControllerRef.current?.abort()
+    sequenceControllerRef.current = null
+    if (sequenceElectronRequestIdRef.current && window.electronAPI?.cancelRequest) {
+      window.electronAPI.cancelRequest(sequenceElectronRequestIdRef.current)
+      sequenceElectronRequestIdRef.current = null
+    }
     setRunningSequenceId(null)
   }, [])
 
@@ -757,6 +811,7 @@ export function PostmanLite() {
       setActiveSocketTabId(null)
       await createTab({ ...request }, request.id)
     }
+    setActiveView('requests')
   }, [tabs, createTab, setActiveTab])
 
   // Open history entry in new tab
@@ -766,6 +821,7 @@ export function PostmanLite() {
       id: generateId(), // New ID since it's not saved
     })
     await createTab(newRequest)
+    setActiveView('requests')
     // Show the response from history
     if (entry.response) {
       // Need to wait for tab to be created, then set response
@@ -1286,7 +1342,11 @@ export function PostmanLite() {
                 <UrlBar
                   request={activeTab.request}
                   onMethodChange={(method) => updateActiveRequest({ method })}
-                  onUrlChange={(url) => updateActiveRequest({ url })}
+                  onUrlChange={(url) => {
+                    const { search } = splitUrl(url)
+                    const params = searchToParams(search, activeTab.request.params)
+                    updateActiveRequest({ url, params })
+                  }}
                   onCurlImport={updateActiveRequest}
                   onSend={executeRequest}
                   onCancel={cancelRequest}

@@ -259,9 +259,18 @@ app.on('ready', () => {
   handle('db:invites:send',         (invite) => dbSendInvite(invite))
   handle('db:invites:delete',       (id) => dbDeleteInvite(id))
 
+  const activeRequests = new Map<string, AbortController>()
+
+  ipcMain.on('cancel-request', (_event, { requestId }: { requestId: string }) => {
+    activeRequests.get(requestId)?.abort()
+    activeRequests.delete(requestId)
+  })
+
   ipcMain.handle('make-request', async (_event, options) => {
     try {
-      const { url, method, headers, requestBody } = options
+      const { url, method, headers, requestBody, requestId } = options
+      const controller = new AbortController()
+      if (requestId) activeRequests.set(requestId, controller)
 
       if (!url) {
         return { error: 'URL is required' }
@@ -288,6 +297,7 @@ app.on('ready', () => {
       const fetchOptions: RequestInit = {
         method: method || 'GET',
         headers: fetchHeaders,
+        signal: controller.signal,
       }
 
       // Add body for methods that support it
@@ -346,6 +356,7 @@ app.on('ready', () => {
         responseHeaders[key] = value
       })
 
+      if (requestId) activeRequests.delete(requestId)
       return {
         status: response.status,
         statusText: response.statusText,
@@ -358,6 +369,9 @@ app.on('ready', () => {
         url: finalUrl,
       }
     } catch (error) {
+      const isAbort = error instanceof Error && error.name === 'AbortError'
+      if (options.requestId) activeRequests.delete(options.requestId)
+      if (isAbort) return { aborted: true }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
 
       return {

@@ -7,6 +7,7 @@ import { ParamsTab } from './params-tab'
 import { HeadersTab } from './headers-tab'
 import { BodyTab } from './body-tab'
 import { AuthTab } from './auth-tab'
+import { splitUrl, paramsToSearch, searchToParams } from '@/lib/url-params'
 
 interface RequestBuilderProps {
   request: RequestConfig
@@ -37,7 +38,11 @@ export function RequestBuilder({
         <UrlBar
           request={request}
           onMethodChange={(method: HttpMethod) => onUpdate({ method })}
-          onUrlChange={(url) => onUpdate({ url })}
+          onUrlChange={(url) => {
+            const { search } = splitUrl(url)
+            const params = searchToParams(search, request.params)
+            onUpdate({ url, params })
+          }}
           onCurlImport={onUpdate}
           onSend={onSend}
           onCancel={onCancel ?? (() => {})}
@@ -78,7 +83,12 @@ export function RequestBuilder({
           <TabsContent value="params" className="flex-1 overflow-auto m-0">
             <ParamsTab
               params={request.params}
-              onChange={(params: KeyValuePair[]) => onUpdate({ params })}
+              onChange={(params: KeyValuePair[]) => {
+                const { base } = splitUrl(request.url)
+                const search = paramsToSearch(params)
+                const url = search ? `${base}?${search}` : base
+                onUpdate({ params, url })
+              }}
               readOnly={readOnly}
             />
           </TabsContent>

@@ -4,6 +4,7 @@ declare global {
   interface Window {
     electronAPI?: {
       makeRequest: (options: any) => Promise<any>
+      cancelRequest: (requestId: string) => void
       minimize: () => void
       maximize: () => void
       close: () => void

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { X } from 'lucide-react'
+import { useDebouncedCallback } from '@/hooks/use-debounce'
 
 type OklchColor = { l: number; c: number; h: number }
 
@@ -221,14 +222,18 @@ export function SettingsPanel({ open, onClose }: Props) {
     applySettings(loaded)
   }, [])
 
+  const saveDebounced = useDebouncedCallback((next: Settings) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  }, 300)
+
   const update = useCallback((updater: (prev: Settings) => Settings) => {
     setS(prev => {
       const next = updater(prev)
       applySettings(next)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      saveDebounced(next)
       return next
     })
-  }, [])
+  }, [saveDebounced])
 
   if (!open) return null
 
@@ -302,23 +307,10 @@ export function SettingsPanel({ open, onClose }: Props) {
           {/* ── Text ───────────────────────────────────────────────────────── */}
           <section className="space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Text</p>
-            {/* fg must be at least 0.4 away from bg, on the opposite side */}
-            {(() => {
-              const dark = s.bgL <= 0.5
-              const fgMin = dark ? Math.min(1, s.bgL + 0.4) : 0
-              const fgMax = dark ? 1 : Math.max(0, s.bgL - 0.4)
-              const mutedMin = parseFloat((s.bgL + 0.15).toFixed(2))
-              const mutedMax = parseFloat((s.fgL - 0.1).toFixed(2))
-              return (
-                <>
-                  <Slider label="Text Brightness" value={s.fgL} min={fgMin} max={fgMax} step={0.01}
-                    onChange={v => update(prev => ({ ...prev, fgL: v }))} />
-                  <Slider label="Muted Text" value={s.mutedL}
-                    min={Math.min(mutedMin, mutedMax)} max={Math.max(mutedMin, mutedMax)} step={0.01}
-                    onChange={v => update(prev => ({ ...prev, mutedL: v }))} />
-                </>
-              )
-            })()}
+            <Slider label="Text Brightness" value={s.fgL} min={0} max={1} step={0.01}
+              onChange={v => update(prev => ({ ...prev, fgL: v }))} />
+            <Slider label="Muted Text" value={s.mutedL} min={0} max={1} step={0.01}
+              onChange={v => update(prev => ({ ...prev, mutedL: v }))} />
             <div className="flex gap-1.5">
               <Swatch color={{ l: s.fgL, c: 0, h: 0 }} label="Text" />
               <Swatch color={{ l: s.mutedL, c: 0, h: 0 }} label="Muted" />
