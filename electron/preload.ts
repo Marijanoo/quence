@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
+  zoomIn: () => ipcRenderer.send('window-zoom-in'),
+  zoomOut: () => ipcRenderer.send('window-zoom-out'),
   wsConnect: (socketId: string, url: string, headers?: Record<string, string>, protocol?: string) =>
     ipcRenderer.send('ws-connect', { socketId, url, headers, protocol }),
   wsSend: (socketId: string, data: string) =>
@@ -67,7 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       delete: (id: string) => invoke('db:socketConfigs:delete', id),
     },
     sequences: {
-      get:    (collectionId?: string) => invoke('db:sequences:get', collectionId),
+      get:    (workspaceId?: string) => invoke('db:sequences:get', workspaceId),
       create: (s: any) => invoke('db:sequences:create', s),
       update: (id: string, data: any) => invoke('db:sequences:update', id, data),
       delete: (id: string) => invoke('db:sequences:delete', id),

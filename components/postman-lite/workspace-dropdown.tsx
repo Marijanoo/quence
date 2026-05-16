@@ -122,13 +122,13 @@ export function WorkspaceDropdown({
     <div ref={containerRef} className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-secondary transition-colors group"
+        className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
       >
-        <FolderOpen className="h-4 w-4 text-primary shrink-0" />
-        <span className="text-sm font-medium text-foreground max-w-40 truncate">
+        <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+        <span className="text-xs font-medium max-w-32 truncate">
           {activeWorkspace?.name ?? 'Workspaces'}
         </span>
-        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (

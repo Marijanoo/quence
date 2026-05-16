@@ -63,6 +63,7 @@ export function EnvironmentsPanel({
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false)
   const [selectedEnv, setSelectedEnv] = useState<Environment | null>(null)
   const [inputValue, setInputValue] = useState('')
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
 
   const toggleEnv = (id: string) => {
     const newExpanded = new Set(expandedEnvs)
@@ -226,7 +227,7 @@ export function EnvironmentsPanel({
                   open={isExpanded}
                   onOpenChange={() => toggleEnv(env.id)}
                 >
-                  <div className="group flex items-center hover:bg-secondary/50">
+                  <div className="group flex items-center hover:bg-secondary/50" onContextMenu={(e) => { e.preventDefault(); setOpenMenuId(env.id) }}>
                     <CollapsibleTrigger className="flex items-center flex-1 px-3 py-1.5 text-sm">
                       <ChevronRight
                         className={cn(
@@ -242,7 +243,7 @@ export function EnvironmentsPanel({
                         <Check className="h-3 w-3 ml-2 text-primary" />
                       )}
                     </CollapsibleTrigger>
-                    <DropdownMenu>
+                    <DropdownMenu open={openMenuId === env.id} onOpenChange={(o) => setOpenMenuId(o ? env.id : null)}>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"

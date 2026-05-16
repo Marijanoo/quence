@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import Image from 'next/image'
+import { Loader2, Minus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,7 +12,12 @@ type Mode = 'login' | 'register'
 
 export function LoginScreen() {
   const { login, register } = useAuth()
+  const [isElectron, setIsElectron] = useState(false)
   const [mode, setMode] = useState<Mode>('login')
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) setIsElectron(true)
+  }, [])
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -48,16 +54,50 @@ export function LoginScreen() {
     <div className="flex flex-col h-screen bg-background">
       {/* Draggable title bar area */}
       <div
-        className="h-8 bg-card border-b border-border shrink-0 flex items-center px-3"
+        className="h-8 bg-card border-b border-border shrink-0 flex items-center justify-between"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <span className="text-xs font-medium text-muted-foreground">Postman Lite</span>
+        <div className="flex items-center gap-1.5 px-3">
+          <Image src="/logo.png" alt="Quence" width={16} height={16} className="shrink-0" />
+          <span className="text-xs font-medium text-muted-foreground">Quence</span>
+        </div>
+        {isElectron && (
+          <div className="flex items-center h-full" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <Button
+              variant="ghost" size="icon"
+              className="h-full w-10 rounded-none hover:bg-secondary text-muted-foreground hover:text-foreground"
+              onClick={() => window.electronAPI?.minimize()}
+              tabIndex={-1}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost" size="icon"
+              className="h-full w-10 rounded-none hover:bg-secondary text-muted-foreground hover:text-foreground"
+              onClick={() => window.electronAPI?.maximize()}
+              tabIndex={-1}
+            >
+              <Square className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost" size="icon"
+              className="h-full w-10 rounded-none hover:bg-[oklch(0.65_0.22_25)] hover:text-white text-muted-foreground"
+              onClick={() => window.electronAPI?.close()}
+              tabIndex={-1}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 items-center justify-center p-6">
         <div className="w-full max-w-sm space-y-6">
           {/* Logo / title */}
           <div className="space-y-1 text-center">
+            <div className="flex justify-center mb-3">
+              <Image src="/logo.png" alt="Quence" width={56} height={56} />
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight">
               {mode === 'login' ? 'Sign in' : 'Create account'}
             </h1>

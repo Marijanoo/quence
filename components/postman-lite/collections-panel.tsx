@@ -31,8 +31,6 @@ import {
   Plus,
   Trash2,
   Pencil,
-  FileJson,
-  Wifi,
   Upload,
   Download,
   GripVertical,
@@ -57,6 +55,8 @@ interface CollectionsPanelProps {
   onImportCollection: (collection: Collection, requests: RequestConfig[], socketConfigs?: SocketConfig[]) => void
   onOpenSocketConfig?: (config: SocketConfig) => void
   onDeleteSocketConfig?: (id: string) => void
+  onRenameRequest?: (id: string, name: string) => void
+  onRenameSocketConfig?: (id: string, name: string) => void
   sequenceDragMode?: boolean
 }
 
@@ -86,15 +86,19 @@ export function CollectionsPanel({
   onImportCollection,
   onOpenSocketConfig,
   onDeleteSocketConfig,
+  onRenameRequest,
+  onRenameSocketConfig,
   sequenceDragMode = false,
 }: CollectionsPanelProps) {
   const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set())
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false)
   const [selectedCollection, setSelectedCollection] = useState<Collection | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ type: 'request' | 'socket'; id: string } | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [pendingDeleteRequestId, setPendingDeleteRequestId] = useState<string | null>(null)
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -259,17 +263,37 @@ export function CollectionsPanel({
   }
 
   const handleRename = () => {
-    if (inputValue.trim() && selectedCollection) {
+    if (!inputValue.trim()) return
+    if (selectedCollection) {
       onRenameCollection(selectedCollection.id, inputValue.trim())
-      setInputValue('')
       setSelectedCollection(null)
-      setIsRenameDialogOpen(false)
+    } else if (renameTarget) {
+      if (renameTarget.type === 'request') onRenameRequest?.(renameTarget.id, inputValue.trim())
+      else onRenameSocketConfig?.(renameTarget.id, inputValue.trim())
+      setRenameTarget(null)
     }
+    setInputValue('')
+    setIsRenameDialogOpen(false)
   }
 
   const openRenameDialog = (collection: Collection) => {
     setSelectedCollection(collection)
+    setRenameTarget(null)
     setInputValue(collection.name)
+    setIsRenameDialogOpen(true)
+  }
+
+  const openRenameRequest = (request: RequestConfig) => {
+    setRenameTarget({ type: 'request', id: request.id })
+    setSelectedCollection(null)
+    setInputValue(request.name)
+    setIsRenameDialogOpen(true)
+  }
+
+  const openRenameSocket = (sc: SocketConfig) => {
+    setRenameTarget({ type: 'socket', id: sc.id })
+    setSelectedCollection(null)
+    setInputValue(sc.name)
     setIsRenameDialogOpen(true)
   }
 
@@ -609,6 +633,7 @@ export function CollectionsPanel({
                       isCollectionDraggingOver && 'border-t-2 border-primary',
                       isRequestDraggingOverHeader && 'bg-primary/10 outline outline-1 outline-primary rounded',
                     )}
+                    onContextMenu={(e) => { e.preventDefault(); setOpenMenuId(collection.id) }}
                     draggable={canWrite && !isSearching}
                     onDragStart={canWrite && !isSearching ? (e) => handleCollectionDragStart(e, collection.id) : undefined}
                     onDragOver={canWrite && !isSearching ? (e) => {
@@ -637,7 +662,7 @@ export function CollectionsPanel({
                         ({collectionRequests.length})
                       </span>
                     </CollapsibleTrigger>
-                    <DropdownMenu>
+                    <DropdownMenu open={openMenuId === collection.id} onOpenChange={(o) => setOpenMenuId(o ? collection.id : null)}>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
@@ -675,27 +700,36 @@ export function CollectionsPanel({
                     {collectionSockets.map((sc) => (
                       <div
                         key={sc.id}
-                        className="group flex items-center hover:bg-secondary/50 pl-10 pr-2"
+                        className="group flex items-center hover:bg-secondary/50 pl-12 pr-2"
+                        onContextMenu={(e) => { e.preventDefault(); setOpenMenuId(sc.id) }}
                       >
                         <button
                           onClick={() => onOpenSocketConfig?.(sc)}
                           className="flex items-center flex-1 py-1.5 min-w-0"
                         >
-                          <Wifi className="h-3.5 w-3.5 mr-2 text-muted-foreground shrink-0" />
-                          <span className={cn('font-mono text-[10px] font-semibold mr-2 shrink-0', sc.protocol === 'socketio' ? 'text-[oklch(0.65_0.2_280)]' : 'text-[oklch(0.72_0.19_160)]')}>
+                          <span className={cn('font-mono text-xs font-semibold mr-2 shrink-0', sc.protocol === 'socketio' ? 'text-[oklch(0.65_0.2_280)]' : 'text-[oklch(0.72_0.19_160)]')}>
                             {sc.protocol === 'socketio' ? 'SIO' : 'WS'}
                           </span>
-                          <span className="truncate text-xs text-muted-foreground">{sc.name}</span>
+                          <span className="truncate text-sm text-muted-foreground">{sc.name}</span>
                         </button>
                         {canWrite && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
-                            onClick={() => onDeleteSocketConfig?.(sc.id)}
-                          >
-                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                          </Button>
+                          <DropdownMenu open={openMenuId === sc.id} onOpenChange={(o) => setOpenMenuId(o ? sc.id : null)}>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0">
+                                <MoreHorizontal className="h-3 w-3 text-muted-foreground" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openRenameSocket(sc)}>
+                                <Pencil className="h-4 w-4 mr-2" />
+                                Rename
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => onDeleteSocketConfig?.(sc.id)} className="text-destructive">
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         )}
                       </div>
                     ))}
@@ -706,12 +740,13 @@ export function CollectionsPanel({
                         <div
                           key={request.id}
                           className={cn(
-                            'group flex items-center hover:bg-secondary/50 pl-10 pr-2',
+                            'group flex items-center hover:bg-secondary/50 pl-12 pr-2',
                             !sequenceDragMode && dragRequestId === request.id && 'opacity-40',
                             isReqDraggingOver && isSameCollection && 'border-t-2 border-primary',
                             isReqDraggingOver && !isSameCollection && 'border-t-2 border-primary/60',
                             sequenceDragMode && 'cursor-grab',
                           )}
+                          onContextMenu={(e) => { e.preventDefault(); setOpenMenuId(request.id) }}
                           draggable={sequenceDragMode || (canWrite && !isSearching)}
                           onDragStart={sequenceDragMode
                             ? (e) => { e.dataTransfer.setData('application/sequence-request', JSON.stringify(request)); e.dataTransfer.effectAllowed = 'copy' }
@@ -724,23 +759,31 @@ export function CollectionsPanel({
                             onClick={() => onOpenRequest(request)}
                             className="flex items-center flex-1 py-1.5 min-w-0"
                           >
-                            <FileJson className="h-3.5 w-3.5 mr-2 text-muted-foreground shrink-0" />
-                            <span className={cn('font-mono text-[10px] font-semibold mr-2 shrink-0', methodColors[request.method])}>
+                            <span className={cn('font-mono text-xs font-semibold mr-2 shrink-0', methodColors[request.method])}>
                               {request.method}
                             </span>
-                            <span className="truncate text-xs text-muted-foreground">
+                            <span className="truncate text-sm text-muted-foreground">
                               {request.name}
                             </span>
                           </button>
                           {!sequenceDragMode && canWrite && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
-                              onClick={() => setPendingDeleteRequestId(request.id)}
-                            >
-                              <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                            </Button>
+                            <DropdownMenu open={openMenuId === request.id} onOpenChange={(o) => setOpenMenuId(o ? request.id : null)}>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0">
+                                  <MoreHorizontal className="h-3 w-3 text-muted-foreground" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => openRenameRequest(request)}>
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPendingDeleteRequestId(request.id)} className="text-destructive">
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
                         </div>
                       )
@@ -774,11 +817,13 @@ export function CollectionsPanel({
         </DialogContent>
       </Dialog>
 
-      {/* Rename Collection Dialog */}
+      {/* Rename Dialog */}
       <Dialog open={isRenameDialogOpen} onOpenChange={setIsRenameDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rename Collection</DialogTitle>
+            <DialogTitle>
+              {renameTarget?.type === 'request' ? 'Rename Request' : renameTarget?.type === 'socket' ? 'Rename Socket' : 'Rename Collection'}
+            </DialogTitle>
           </DialogHeader>
           <Input
             value={inputValue}

@@ -2,13 +2,12 @@
 
 import type { Environment } from '@/lib/db/types'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Settings } from 'lucide-react'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Settings, ChevronDown, Check } from 'lucide-react'
 
 interface EnvironmentSelectorProps {
   environments: Environment[]
@@ -22,24 +21,39 @@ export function EnvironmentSelector({
   onSelect,
 }: EnvironmentSelectorProps) {
   return (
-    <Select
-      value={activeEnvironment?.id || 'none'}
-      onValueChange={(v) => onSelect(v === 'none' ? null : v)}
-    >
-      <SelectTrigger className="w-[180px] h-8 bg-secondary border-border">
-        <div className="flex items-center gap-2">
-          <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-          <SelectValue placeholder="No Environment" />
-        </div>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="none">No Environment</SelectItem>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+          <Settings className="h-3.5 w-3.5 shrink-0" />
+          <span className="text-xs font-medium max-w-32 truncate">
+            {activeEnvironment?.name ?? 'No Environment'}
+          </span>
+          <ChevronDown className="h-3 w-3 shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[180px]">
+        <DropdownMenuItem
+          onClick={() => onSelect(null)}
+          className="flex items-center gap-2"
+        >
+          <span className="w-3.5 shrink-0">
+            {!activeEnvironment && <Check className="h-3.5 w-3.5 text-primary" />}
+          </span>
+          No Environment
+        </DropdownMenuItem>
         {environments.map((env) => (
-          <SelectItem key={env.id} value={env.id}>
+          <DropdownMenuItem
+            key={env.id}
+            onClick={() => onSelect(env.id)}
+            className="flex items-center gap-2"
+          >
+            <span className="w-3.5 shrink-0">
+              {activeEnvironment?.id === env.id && <Check className="h-3.5 w-3.5 text-primary" />}
+            </span>
             {env.name}
-          </SelectItem>
+          </DropdownMenuItem>
         ))}
-      </SelectContent>
-    </Select>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

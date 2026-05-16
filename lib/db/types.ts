@@ -1,4 +1,4 @@
-// Database entity types for Postman Lite
+// Database entity types for Quence
 // These types define the data structures stored in the database
 
 import { generateId } from '@/lib/utils'
@@ -199,6 +199,8 @@ export interface WorkspaceTab {
   savedRequest?: RequestConfig // Snapshot at last save — used to detect real changes
   response: ResponseData | null
   isDirty: boolean
+  isHistorical?: boolean // Opened from history — snapshot, cannot send
+  historyTimestamp?: number
 }
 
 export interface WorkspaceState {
@@ -206,6 +208,7 @@ export interface WorkspaceState {
   activeTabId: string | null
   socketTabs?: SocketTab[]
   activeSocketTabId?: string | null
+  tabOrder?: { id: string; kind: 'http' | 'socket' }[]
 }
 
 // Factory function to create a new request with defaults
@@ -297,7 +300,7 @@ export interface SequenceAction {
 
 export interface SequenceStep {
   id: string
-  type: 'request' | 'action'
+  type: 'request' | 'action' | 'sequence'
   // request step fields
   requestId?: string
   name: string
@@ -305,6 +308,8 @@ export interface SequenceStep {
   url?: string
   // action step fields
   action?: SequenceAction
+  // sequence step fields
+  sequenceId?: string
   order: number
 }
 
@@ -317,11 +322,13 @@ export interface SequenceStepResult {
   error?: string
   extractedValue?: string  // for extract-json actions
   response?: ResponseData  // full response for request steps
+  subResults?: Record<string, SequenceStepResult>  // for sub-sequence steps
 }
 
 export interface Sequence {
   id: string
   name: string
+  workspaceId?: string
   collectionId?: string
   steps: SequenceStep[]
   createdAt: number

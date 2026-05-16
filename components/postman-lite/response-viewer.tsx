@@ -6,11 +6,12 @@ import { CodeViewer } from './code-viewer'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Copy, Check, Clock, Database, FileDown, Music, Film, Eye, Code2 } from 'lucide-react'
+import { Copy, Check, Clock, Database, FileDown, Music, Film, Eye, Code2, History } from 'lucide-react'
 
 interface ResponseViewerProps {
   response: ResponseData | null
   isLoading: boolean
+  historyTimestamp?: number | null
 }
 
 function formatSize(bytes: number): string {
@@ -47,7 +48,7 @@ function base64ToBlobUrl(b64: string, mimeType: string): string {
   return URL.createObjectURL(new Blob([bytes], { type: mimeType }))
 }
 
-export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
+export function ResponseViewer({ response, isLoading, historyTimestamp }: ResponseViewerProps) {
   const [copied, setCopied] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [previewMode, setPreviewMode] = useState<'file' | 'raw'>('file')
@@ -122,6 +123,12 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
 
   return (
     <div className="flex flex-col h-full">
+      {historyTimestamp && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-[oklch(0.75_0.18_80)]/10 border-b border-[oklch(0.75_0.18_80)]/30 text-[oklch(0.75_0.18_80)] text-xs shrink-0">
+          <History className="h-3.5 w-3.5 shrink-0" />
+          <span>Historical response from {new Date(historyTimestamp).toLocaleString()} — actual responses may differ.</span>
+        </div>
+      )}
       {/* Response meta */}
       <div className="flex items-center gap-4 px-4 py-3 border-b border-border">
         <span className={cn('px-2 py-1 rounded text-sm font-semibold', getStatusColor(response.status))}>
@@ -170,7 +177,7 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
         </TabsList>
 
         {/* Body tab */}
-        <TabsContent value="body" className="flex-1 overflow-auto m-0 p-0">
+        <TabsContent value="body" className="flex-1 overflow-hidden m-0 p-0 min-h-0">
           {response.isBinary ? (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-8">
               <Database className="h-12 w-12 opacity-20" />
@@ -189,18 +196,8 @@ export function ResponseViewer({ response, isLoading }: ResponseViewerProps) {
                 <p className="text-xs text-muted-foreground italic">Switch to the Preview tab to view.</p>
               )}
             </div>
-          ) : ct.includes('application/json') ? (
-            <div className="p-4">
-              <CodeViewer data={response.body} language="json" />
-            </div>
-          ) : isHtml ? (
-            <div className="p-4">
-              <CodeViewer data={response.body} language="html" />
-            </div>
           ) : (
-            <div className="p-4">
-              <CodeViewer data={response.body} language="auto" />
-            </div>
+            <CodeViewer data={response.body} language={ct.includes('application/json') ? 'json' : isHtml ? 'html' : 'auto'} className="h-full" />
           )}
         </TabsContent>
 

@@ -1,8 +1,8 @@
 'use client'
 
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { SocketConfig, SocketMessage, SocketMessageType, SocketEvent, KeyValuePair, AuthConfig, SocketProtocol } from '@/lib/db/types'
-import { createKeyValuePair } from '@/lib/db/types'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import type { SocketConfig, SocketMessage, SocketMessageType, SocketEvent, AuthConfig, SocketProtocol } from '@/lib/db/types'
 import { generateId } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,11 +19,16 @@ import { AuthTab } from './auth-tab'
 import { VariableHighlightTextarea } from './variable-highlight-textarea'
 import { VariableHighlightInput } from './variable-highlight-input'
 import { useEnvironmentContext } from './environment-context'
-import { parseVariables } from '@/lib/variable-parser'
 import { cn } from '@/lib/utils'
-import { Plus, Trash2, Wifi, WifiOff, Loader2, ArrowUp, ArrowDown } from 'lucide-react'
+import { Plus, Trash2, Wifi, WifiOff, Loader2, ArrowUp, ArrowDown, ChevronDown } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 interface SocketBuilderProps {
   config: SocketConfig
@@ -60,6 +65,83 @@ const statusLabels = {
   error: 'Error',
 }
 
+const ALL_TABS = ['message', 'events', 'params', 'headers', 'auth'] as const
+type SocketTab = typeof ALL_TABS[number]
+
+function tabLabel(tab: SocketTab, config: SocketConfig): string {
+  if (tab === 'events') return `Events${config.events.length > 0 ? ` (${config.events.length})` : ''}`
+  if (tab === 'params') return `Params${config.params.length > 0 ? ` (${config.params.length})` : ''}`
+  if (tab === 'headers') return `Headers${config.headers.length > 0 ? ` (${config.headers.length})` : ''}`
+  return tab.charAt(0).toUpperCase() + tab.slice(1)
+}
+
+function OverflowTabsList({ config, activeTab, onTabChange }: { config: SocketConfig; activeTab: SocketTab; onTabChange: (tab: SocketTab) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [fits, setFits] = useState(true)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => {
+      const items = Array.from(el.querySelectorAll<HTMLElement>('[data-tab-measure]'))
+      const totalWidth = items.reduce((sum, item) => sum + item.offsetWidth, 0)
+      setFits(totalWidth <= el.offsetWidth)
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    measure()
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div ref={containerRef} className="relative flex items-stretch border-b border-border shrink-0 bg-transparent">
+      {/* Hidden measurement row */}
+      <div className="absolute top-0 left-0 opacity-0 pointer-events-none flex" aria-hidden>
+        {ALL_TABS.map(tab => (
+          <span key={tab} data-tab-measure className="px-4 py-2 text-sm whitespace-nowrap">
+            {tabLabel(tab, config)}
+          </span>
+        ))}
+      </div>
+
+      {fits ? (
+        <TabsList className="flex-1 justify-start rounded-none border-none bg-transparent h-auto p-0">
+          {ALL_TABS.map(tab => (
+            <TabsTrigger
+              key={tab}
+              value={tab}
+              onClick={() => onTabChange(tab)}
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2 text-sm whitespace-nowrap"
+            >
+              {tabLabel(tab, config)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 border-primary text-foreground hover:text-foreground transition-colors">
+              {tabLabel(activeTab, config)}
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {ALL_TABS.map(tab => (
+              <DropdownMenuItem
+                key={tab}
+                className={cn(activeTab === tab && 'bg-accent text-accent-foreground')}
+                onSelect={() => onTabChange(tab)}
+              >
+                {tabLabel(tab, config)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  )
+}
+
 export function SocketBuilder({
   config,
   messages,
@@ -75,6 +157,7 @@ export function SocketBuilder({
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [ackEnabled, setAckEnabled] = useState(false)
+  const [activeTab, setActiveTab] = useState<SocketTab>('message')
 
   useEffect(() => {
     if (autoScroll) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -119,8 +202,12 @@ export function SocketBuilder({
           onValueChange={(v) => onUpdate({ protocol: v as SocketProtocol })}
           disabled={readOnly || isConnected || isConnecting}
         >
-          <SelectTrigger className="w-[90px] bg-secondary border-border h-8 text-xs font-mono font-semibold shrink-0">
-            <SelectValue />
+          <SelectTrigger className="w-auto min-w-[60px] bg-secondary border-border h-8 text-xs font-mono font-semibold shrink-0 px-2 gap-1">
+            <SelectValue>
+              <span className={(config.protocol ?? 'ws') === 'ws' ? 'text-[oklch(0.72_0.19_160)]' : 'text-[oklch(0.65_0.2_250)]'}>
+                {(config.protocol ?? 'ws') === 'ws' ? 'WS' : 'SIO'}
+              </span>
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ws">
@@ -167,27 +254,11 @@ export function SocketBuilder({
       </div>
 
       {/* Body: left config pane + right message log */}
-      <div className="flex flex-1 min-h-0">
+      <ResizablePanelGroup direction="horizontal" className="flex-1">
         {/* Left: config tabs */}
-        <div className="w-1/2 border-r border-border flex flex-col min-h-0">
-          <Tabs defaultValue="message" className="flex flex-col flex-1 min-h-0">
-            <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0 shrink-0">
-              {(['message', 'events', 'params', 'headers', 'auth'] as const).map(tab => (
-                <TabsTrigger
-                  key={tab}
-                  value={tab}
-                  className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2 capitalize text-sm"
-                >
-                  {tab === 'events'
-                    ? `Events${config.events.length > 0 ? ` (${config.events.length})` : ''}`
-                    : tab === 'params'
-                      ? `Params${config.params.length > 0 ? ` (${config.params.length})` : ''}`
-                      : tab === 'headers'
-                        ? `Headers${config.headers.length > 0 ? ` (${config.headers.length})` : ''}`
-                        : tab.charAt(0).toUpperCase() + tab.slice(1)}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+        <ResizablePanel defaultSize={50} minSize={20} className="flex flex-col min-h-0">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SocketTab)} className="flex flex-col flex-1 min-h-0">
+            <OverflowTabsList config={config} activeTab={activeTab} onTabChange={setActiveTab} />
 
             {/* Message tab */}
             <TabsContent value="message" className="flex-1 flex flex-col min-h-0 m-0 p-4 gap-3">
@@ -333,10 +404,12 @@ export function SocketBuilder({
               />
             </TabsContent>
           </Tabs>
-        </div>
+        </ResizablePanel>
+
+        <ResizableHandle className="w-px bg-border" />
 
         {/* Right: message log */}
-        <div className="w-1/2 flex flex-col min-h-0">
+        <ResizablePanel defaultSize={50} minSize={20} className="flex flex-col min-h-0">
           <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Messages {messages.length > 0 && `(${messages.length})`}
@@ -426,8 +499,8 @@ export function SocketBuilder({
             )}
             <div ref={messagesEndRef} />
           </div>
-        </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   )
 }

@@ -29,6 +29,8 @@ interface SidebarProps {
   socketConfigs?: SocketConfig[]
   onOpenSocketConfig?: (config: SocketConfig) => void
   onDeleteSocketConfig?: (id: string) => void
+  onRenameRequest?: (id: string, name: string) => void
+  onRenameSocketConfig?: (id: string, name: string) => void
   sequenceDragMode?: boolean
   onOpenHistoryEntry: (entry: HistoryEntry) => void
   onDeleteHistoryEntry: (id: string) => void
@@ -63,6 +65,8 @@ export function Sidebar({
   socketConfigs,
   onOpenSocketConfig,
   onDeleteSocketConfig,
+  onRenameRequest,
+  onRenameSocketConfig,
   sequenceDragMode,
   onOpenHistoryEntry,
   onDeleteHistoryEntry,
@@ -128,6 +132,8 @@ export function Sidebar({
           onImportCollection={onImportCollection}
           onOpenSocketConfig={onOpenSocketConfig}
           onDeleteSocketConfig={onDeleteSocketConfig}
+          onRenameRequest={onRenameRequest}
+          onRenameSocketConfig={onRenameSocketConfig}
           sequenceDragMode={sequenceDragMode}
         />
       </TabsContent>

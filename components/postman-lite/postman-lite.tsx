@@ -38,7 +38,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Sidebar } from './sidebar'
-import { TabBar } from './tab-bar'
+import { TabBar, type TabOrderEntry } from './tab-bar'
 import { RequestBuilder } from './request-builder'
 import { ResponseViewer } from './response-viewer'
 import { UrlBar } from './url-bar'
@@ -48,6 +48,7 @@ import { EnvironmentSelector } from './environment-selector'
 import { EnvironmentProvider } from './environment-context'
 import { TitleBar } from './title-bar'
 import { SettingsPanel } from './settings-panel'
+import { HelpPanel } from './help-panel'
 import { JwtDecoder } from './jwt-decoder-panel'
 import { JsonFormatter } from './json-formatter-panel'
 import { TextDiff } from './text-diff-panel'
@@ -56,7 +57,7 @@ import { WorkspaceInviteDialog } from './workspace-invite-dialog'
 import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
 import { useAuth } from '@/lib/auth/auth-context'
 import type { Workspace } from '@/lib/db/types'
-import { Save, PanelBottom, PanelRight, Settings2, ListOrdered, Users, UserPlus, KeyRound, Braces, GitCompare } from 'lucide-react'
+import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -105,18 +106,25 @@ export function PostmanLite() {
   const [saveSocketCollectionId, setSaveSocketCollectionId] = useState<string>('')
   const [responseLayout, setResponseLayout] = useState<'side' | 'bottom'>('side')
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isHelpOpen, setIsHelpOpen] = useState(false)
   const [saveRequestName, setSaveRequestName] = useState('')
   const [saveCollectionId, setSaveCollectionId] = useState<string>('')
   const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
+  const [pendingCloseSocketTabId, setPendingCloseSocketTabId] = useState<string | null>(null)
+  const [isSocketCloseConfirmOpen, setIsSocketCloseConfirmOpen] = useState(false)
   const [inviteDialogWorkspace, setInviteDialogWorkspace] = useState<Workspace | null>(null)
   const [quickInviteWorkspace, setQuickInviteWorkspace] = useState<Workspace | null>(null)
 
   // Socket tab state (kept in memory only — not persisted to DB, connections are ephemeral)
   const [socketTabs, setSocketTabs] = useState<SocketTab[]>([])
   const [activeSocketTabId, setActiveSocketTabId] = useState<string | null>(null)
+  // Unified tab order — interleaves http and socket tabs in insertion order
+  const [tabOrder, setTabOrder] = useState<{ id: string; kind: 'http' | 'socket' }[]>([])
   // Map of tabId → WebSocket instance
   const socketRefs = useRef<Record<string, WebSocket>>({})
+  // Last active request tab before switching to a socket — used to restore on socket close
+  const lastRequestTabIdRef = useRef<string | null>(null)
 
   const activeSocketTab = socketTabs.find(t => t.id === activeSocketTabId) ?? null
 
@@ -167,26 +175,89 @@ export function PostmanLite() {
   const { collections, create: createCollection, update: updateCollection, remove: removeCollection, importCollection, reorder: reorderCollections } = useCollections(safeWorkspaceId)
   const { requests, create: createRequest, update: updateRequest, remove: removeRequest, refresh: refreshRequests, importRequests, reorderRequests } = useRequests()
   const { socketConfigs, create: createSocketConfig, update: dbUpdateSocketConfig, remove: removeSocketConfig, importSocketConfigs, refresh: refreshSocketConfigs } = useSocketConfigs()
-  const { sequences, create: createSequence, update: updateSequence, remove: removeSequence } = useSequences()
+  const { sequences, create: createSequence, update: updateSequence, remove: removeSequence } = useSequences(safeWorkspaceId)
   const { history, add: addToHistory, remove: removeHistoryEntry, clear: clearHistory } = useHistory(safeWorkspaceId)
   const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment } = useEnvironments(safeWorkspaceId)
   const {
     tabs,
     activeTab,
     activeTabId,
+    savedSocketTabs,
+    savedActiveSocketTabId,
+    savedTabOrder,
     isLoading: workspaceLoading,
     createTab,
     closeTab,
     setActiveTab,
     updateActiveRequest,
+    updateTab,
     setActiveResponse,
     markTabSaved,
     reorderTabs,
+    saveSocketState,
   } = useWorkspace(workspaceManagerLoading ? null : activeWorkspaceId)
+
+  // Restore socket tabs from persisted workspace state once workspace finishes loading.
+  const socketRestoredRef = useRef(false)
+  const saveSocketStateRef = useRef(saveSocketState)
+  useEffect(() => { saveSocketStateRef.current = saveSocketState }, [saveSocketState])
+
+  useEffect(() => {
+    if (workspaceLoading) return
+    socketRestoredRef.current = false
+    setSocketTabs([])
+    setActiveSocketTabId(null)
+    if (savedSocketTabs && savedSocketTabs.length > 0) {
+      const restored = savedSocketTabs.map(t => ({ ...t, connectionStatus: 'disconnected' as const, messages: [] }))
+      setSocketTabs(restored)
+      if (savedTabOrder && savedTabOrder.length > 0) {
+        // Restore exact tab order from DB, but only keep entries that still exist
+        const httpIds = new Set(tabs.map(t => t.id))
+        const socketIds = new Set(restored.map(t => t.id))
+        setTabOrder(savedTabOrder.filter(e => e.kind === 'http' ? httpIds.has(e.id) : socketIds.has(e.id)))
+      } else {
+        // Fallback: append socket tabs after http tabs
+        setTabOrder(prev => [
+          ...prev.filter(e => e.kind === 'http'),
+          ...restored.map(t => ({ id: t.id, kind: 'socket' as const })),
+        ])
+      }
+      if (savedActiveSocketTabId && restored.some(t => t.id === savedActiveSocketTabId)) {
+        setActiveSocketTabId(savedActiveSocketTabId)
+        setActiveTab('')
+      }
+    } else {
+      setTabOrder(prev => prev.filter(e => e.kind === 'http'))
+    }
+    // Mark restored on next tick so the persist effect doesn't fire before state settles
+    setTimeout(() => { socketRestoredRef.current = true }, 0)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceLoading, activeWorkspaceId])
+
+  // Persist socket tabs and tab order whenever they change — but only after initial restore is done
+  useEffect(() => {
+    if (!socketRestoredRef.current) return
+    saveSocketStateRef.current(socketTabs, activeSocketTabId, tabOrder)
+  }, [socketTabs, activeSocketTabId, tabOrder])
+
+  // Keep tabOrder in sync with http tabs (persisted).
+  // Socket tab entries are managed explicitly by createSocketTab / closeSocketTab / restore effect.
+  useEffect(() => {
+    setTabOrder(prev => {
+      const existingHttpIds = new Set(prev.filter(e => e.kind === 'http').map(e => e.id))
+      const newEntries = tabs
+        .filter(t => !existingHttpIds.has(t.id))
+        .map(t => ({ id: t.id, kind: 'http' as const }))
+      const httpIds = new Set(tabs.map(t => t.id))
+      const pruned = prev.filter(e => e.kind === 'http' ? httpIds.has(e.id) : true)
+      // Append any new http tabs at the end
+      return [...pruned, ...newEntries]
+    })
+  }, [tabs])
 
   // Execute request
   const executeRequest = useCallback(async () => {
-    if (!activeTab) return
+    if (!activeTab || activeTab.isHistorical) return
 
     // Cancel any in-flight request before starting a new one
     abortControllerRef.current?.abort()
@@ -425,82 +496,117 @@ export function PostmanLite() {
     seq.steps.forEach(s => { initialResults[s.id] = { stepId: s.id, status: 'idle' } })
     setStepResults(initialResults)
 
-    let lastResponseBody: string | null = null
+    // Recursive step runner. Top-level steps write into setStepResults directly.
+    // Sub-sequence steps collect results into a local record returned to the caller,
+    // which stores them in the parent step's subResults — never in the global map.
+    const runSteps = async (
+      steps: typeof seq.steps,
+      lastBody: string | null,
+      visited: Set<string>,
+      reportResult: (stepId: string, result: SequenceStepResult) => void,
+    ): Promise<string | null> => {
+      for (const step of steps) {
+        if (sequenceAbortRef.current || controller.signal.aborted) {
+          reportResult(step.id, { stepId: step.id, status: 'skipped' })
+          continue
+        }
+        reportResult(step.id, { stepId: step.id, status: 'running' })
 
-    for (const step of seq.steps) {
-      if (sequenceAbortRef.current || controller.signal.aborted) {
-        setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
-        continue
-      }
-      setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'running' } }))
-
-      // ── Action step ──────────────────────────────────────────────────────
-      if (step.type === 'action' && step.action) {
-        const { type, jsonKey, envVariable } = step.action
-        if (type === 'extract-json') {
-          if (!lastResponseBody) {
-            setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: 'No previous response to extract from' } }))
+        // ── Sub-sequence step ───────────────────────────────────────────────
+        if (step.type === 'sequence') {
+          const sub = sequences.find(s => s.id === step.sequenceId)
+          if (!sub) {
+            reportResult(step.id, { stepId: step.id, status: 'error', error: 'Sequence not found' })
             continue
           }
-          try {
-            const parsed = JSON.parse(lastResponseBody)
-            // Support dot-notation: "data.access_token"
-            const value = jsonKey.split('.').reduce((obj, key) => obj?.[key], parsed as Record<string, unknown>)
-            if (value === undefined || value === null) {
-              setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: `Key "${jsonKey}" not found in response` } }))
+          if (visited.has(sub.id)) {
+            reportResult(step.id, { stepId: step.id, status: 'error', error: 'Circular sequence reference detected' })
+            continue
+          }
+          const subResults: Record<string, SequenceStepResult> = {}
+          // Initialise sub-step results as idle so the detail panel can render them immediately
+          sub.steps.forEach(s => { subResults[s.id] = { stepId: s.id, status: 'idle' } })
+          reportResult(step.id, { stepId: step.id, status: 'running', subResults: { ...subResults } })
+          const subReport = (subStepId: string, result: SequenceStepResult) => {
+            subResults[subStepId] = result
+            // Re-publish parent step with updated subResults so the UI stays live
+            reportResult(step.id, { stepId: step.id, status: 'running', subResults: { ...subResults } })
+          }
+          lastBody = await runSteps(sub.steps, lastBody, new Set([...visited, sub.id]), subReport)
+          const allOk = sub.steps.every(s => subResults[s.id]?.status === 'success' || subResults[s.id]?.status === 'idle')
+          reportResult(step.id, { stepId: step.id, status: allOk ? 'success' : 'error', subResults: { ...subResults } })
+          continue
+        }
+
+        // ── Action step ─────────────────────────────────────────────────────
+        if (step.type === 'action' && step.action) {
+          const { type, jsonKey, envVariable } = step.action
+          if (type === 'extract-json') {
+            if (!lastBody) {
+              reportResult(step.id, { stepId: step.id, status: 'error', error: 'No previous response to extract from' })
               continue
             }
-            const strValue = typeof value === 'string' ? value : JSON.stringify(value)
-            // Write into active environment
-            if (activeEnvironment) {
-              const existing = activeEnvironment.variables.find(v => v.key === envVariable)
-              const updatedVars = existing
-                ? activeEnvironment.variables.map(v => v.key === envVariable ? { ...v, value: strValue } : v)
-                : [...activeEnvironment.variables, { id: generateId(), key: envVariable, value: strValue, enabled: true }]
-              await updateEnvironment(activeEnvironment.id, { variables: updatedVars })
+            try {
+              const parsed = JSON.parse(lastBody)
+              const value = jsonKey.split('.').reduce((obj, key) => obj?.[key], parsed as Record<string, unknown>)
+              if (value === undefined || value === null) {
+                reportResult(step.id, { stepId: step.id, status: 'error', error: `Key "${jsonKey}" not found in response` })
+                continue
+              }
+              const strValue = typeof value === 'string' ? value : JSON.stringify(value)
+              if (activeEnvironment) {
+                const existing = activeEnvironment.variables.find(v => v.key === envVariable)
+                const updatedVars = existing
+                  ? activeEnvironment.variables.map(v => v.key === envVariable ? { ...v, value: strValue } : v)
+                  : [...activeEnvironment.variables, { id: generateId(), key: envVariable, value: strValue, enabled: true }]
+                await updateEnvironment(activeEnvironment.id, { variables: updatedVars })
+              }
+              reportResult(step.id, { stepId: step.id, status: 'success', extractedValue: strValue })
+            } catch {
+              reportResult(step.id, { stepId: step.id, status: 'error', error: 'Response is not valid JSON' })
             }
-            setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'success', extractedValue: strValue } }))
-          } catch {
-            setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: 'Response is not valid JSON' } }))
           }
+          continue
         }
-        continue
-      }
 
-      // ── Request step ─────────────────────────────────────────────────────
-      const fullRequest = requests.find(r => r.id === step.requestId)
-      if (!fullRequest) {
-        setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: 'Request not found in collections' } }))
-        continue
-      }
-      const start = Date.now()
-      try {
-        const response = await runSingleRequest(fullRequest, controller.signal)
-        const duration = Date.now() - start
-        if (controller.signal.aborted) {
-          setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
+        // ── Request step ────────────────────────────────────────────────────
+        const fullRequest = requests.find(r => r.id === step.requestId)
+        if (!fullRequest) {
+          reportResult(step.id, { stepId: step.id, status: 'error', error: 'Request not found in collections' })
           continue
         }
-        lastResponseBody = response.body
-        const ok = response.status >= 200 && response.status < 300
-        setStepResults(prev => ({
-          ...prev,
-          [step.id]: { stepId: step.id, status: ok ? 'success' : 'error', statusCode: response.status, statusText: response.statusText, duration, response },
-        }))
-      } catch (err) {
-        const duration = Date.now() - start
-        if (err instanceof Error && err.name === 'AbortError') {
-          setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'skipped' } }))
-          continue
+        const start = Date.now()
+        try {
+          const response = await runSingleRequest(fullRequest, controller.signal)
+          const duration = Date.now() - start
+          if (controller.signal.aborted) {
+            reportResult(step.id, { stepId: step.id, status: 'skipped' })
+            continue
+          }
+          lastBody = response.body
+          const ok = response.status >= 200 && response.status < 300
+          reportResult(step.id, { stepId: step.id, status: ok ? 'success' : 'error', statusCode: response.status, statusText: response.statusText, duration, response })
+        } catch (err) {
+          const duration = Date.now() - start
+          if (err instanceof Error && err.name === 'AbortError') {
+            reportResult(step.id, { stepId: step.id, status: 'skipped' })
+            continue
+          }
+          const msg = err instanceof Error ? err.message : 'Unknown error'
+          lastBody = null
+          reportResult(step.id, { stepId: step.id, status: 'error', error: friendlyNetworkError(msg), duration })
         }
-        const msg = err instanceof Error ? err.message : 'Unknown error'
-        lastResponseBody = null
-        setStepResults(prev => ({ ...prev, [step.id]: { stepId: step.id, status: 'error', error: friendlyNetworkError(msg), duration } }))
       }
+      return lastBody
     }
+
+    const topLevelReport = (stepId: string, result: SequenceStepResult) => {
+      setStepResults(prev => ({ ...prev, [stepId]: result }))
+    }
+    await runSteps(seq.steps, null, new Set([seq.id]), topLevelReport)
     sequenceControllerRef.current = null
     setRunningSequenceId(null)
-  }, [requests, runSingleRequest, activeEnvironment, updateEnvironment])
+  }, [requests, sequences, runSingleRequest, activeEnvironment, updateEnvironment])
 
   const stopSequence = useCallback(() => {
     sequenceAbortRef.current = true
@@ -526,28 +632,34 @@ export function PostmanLite() {
       connectionStatus: 'disconnected',
     }
     setSocketTabs(prev => [...prev, tab])
+    setTabOrder(prev => [...prev, { id: tab.id, kind: 'socket' }])
     setActiveSocketTabId(tab.id)
-    // Deactivate HTTP tab
+    // Remember which request tab was active so we can return to it on close
+    lastRequestTabIdRef.current = activeTabId || null
     setActiveTab('')
-  }, [setActiveTab])
+  }, [setActiveTab, activeTabId])
 
   const closeSocketTab = useCallback((tabId: string) => {
     // Disconnect if connected
     const ws = socketRefs.current[tabId]
     if (ws) { ws.close(); delete socketRefs.current[tabId] }
+    setTabOrder(prev => prev.filter(e => e.id !== tabId))
     setSocketTabs(prev => {
       const remaining = prev.filter(t => t.id !== tabId)
       if (activeSocketTabId === tabId) {
-        // Switch to last socket tab or fall back to HTTP tabs
         if (remaining.length > 0) {
           setActiveSocketTabId(remaining[remaining.length - 1].id)
         } else {
+          // No more socket tabs — return to the last request tab we came from
           setActiveSocketTabId(null)
+          const returnTo = lastRequestTabIdRef.current
+          lastRequestTabIdRef.current = null
+          if (returnTo) setActiveTab(returnTo)
         }
       }
       return remaining
     })
-  }, [activeSocketTabId])
+  }, [activeSocketTabId, setActiveTab])
 
   const updateSocketTab = useCallback((tabId: string, patch: Partial<SocketTab>) => {
     setSocketTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...patch } : t))
@@ -794,11 +906,14 @@ export function PostmanLite() {
   const openSocketConfig = useCallback((config: SocketConfig) => {
     const existing = socketTabs.find(t => t.socketId === config.id)
     if (existing) {
+      // Ensure the tab is in tabOrder (may have been restored but not yet in the order array)
+      setTabOrder(prev => prev.some(e => e.id === existing.id) ? prev : [...prev, { id: existing.id, kind: 'socket' as const }])
       setActiveSocketTabId(existing.id)
       setActiveTab('')
     } else {
       createSocketTab(config)
     }
+    setActiveView('requests')
   }, [socketTabs, createSocketTab, setActiveTab])
 
   // Open saved request in new tab, or switch to it if already open
@@ -814,22 +929,12 @@ export function PostmanLite() {
     setActiveView('requests')
   }, [tabs, createTab, setActiveTab])
 
-  // Open history entry in new tab
+  // Open history entry as a read-only snapshot tab
   const openHistoryEntry = useCallback(async (entry: HistoryEntry) => {
-    const newRequest = createNewRequest({
-      ...entry.request,
-      id: generateId(), // New ID since it's not saved
-    })
-    await createTab(newRequest)
+    const request = createNewRequest({ ...entry.request, id: generateId() })
+    await createTab(request, undefined, { response: entry.response, isHistorical: true, historyTimestamp: entry.timestamp })
     setActiveView('requests')
-    // Show the response from history
-    if (entry.response) {
-      // Need to wait for tab to be created, then set response
-      setTimeout(async () => {
-        await setActiveResponse(entry.response)
-      }, 100)
-    }
-  }, [createTab, setActiveResponse])
+  }, [createTab, setActiveView])
 
   // Save current request to collection, then optionally close the tab
   const saveCurrentRequest = useCallback(async () => {
@@ -846,6 +951,7 @@ export function PostmanLite() {
 
     await createRequest(request)
     await markTabSaved(tabToSave.id, request.id)
+    await updateTab(tabToSave.id, { request, isDirty: false })
     await refreshRequests()
 
     setSaveRequestName('')
@@ -853,40 +959,48 @@ export function PostmanLite() {
     setIsSaveDialogOpen(false)
 
     if (pendingCloseTabId) {
+      const remainingHttpTabs = tabs.filter(t => t.id !== pendingCloseTabId)
       await closeTab(pendingCloseTabId)
       setPendingCloseTabId(null)
       setIsCloseConfirmOpen(false)
+      if (remainingHttpTabs.length === 0 && socketTabs.length > 0) {
+        const lastSocket = tabOrder.filter(e => e.kind === 'socket').at(-1)
+        const target = lastSocket ? socketTabs.find(t => t.id === lastSocket.id) : socketTabs[socketTabs.length - 1]
+        if (target) setActiveSocketTabId(target.id)
+      }
     }
-  }, [activeTab, tabs, pendingCloseTabId, saveCollectionId, saveRequestName, createRequest, markTabSaved, refreshRequests, closeTab])
+  }, [activeTab, tabs, pendingCloseTabId, saveCollectionId, saveRequestName, createRequest, markTabSaved, updateTab, refreshRequests, closeTab, socketTabs, tabOrder, setActiveSocketTabId])
 
   // Open save dialog (or save directly if already part of a collection)
   const openSaveDialog = useCallback(async () => {
     if (!activeTab) return
     if (activeTab.requestId) {
-      await updateRequest(activeTab.requestId, { ...activeTab.request, updatedAt: Date.now() })
+      const updated = { ...activeTab.request, name: activeTab.request.name || 'New Request', updatedAt: Date.now() }
+      await updateRequest(activeTab.requestId, updated)
       await markTabSaved(activeTab.id, activeTab.requestId)
+      await updateTab(activeTab.id, { request: updated, isDirty: false })
       await refreshRequests()
       return
     }
     setSaveRequestName(activeTab.request.name || 'New Request')
     setSaveCollectionId(collections[0]?.id || '')
     setIsSaveDialogOpen(true)
-  }, [activeTab, collections, updateRequest, markTabSaved, refreshRequests])
+  }, [activeTab, collections, updateRequest, markTabSaved, updateTab, refreshRequests])
 
   const saveCurrentSocket = useCallback(async () => {
     const tab = socketTabs.find(t => t.id === activeSocketTabId)
     if (!tab || !saveSocketCollectionId || !saveSocketName.trim()) return
     const config: SocketConfig = { ...tab.config, name: saveSocketName.trim(), collectionId: saveSocketCollectionId, updatedAt: Date.now() }
-    console.log('[saveCurrentSocket] saving', config)
     try {
       if (tab.socketId) {
         await dbUpdateSocketConfig(tab.socketId, config)
       } else {
         await createSocketConfig(config)
-        setSocketTabs(prev => prev.map(t => t.id === tab.id ? { ...t, socketId: config.id, isDirty: false } : t))
       }
+      setSocketTabs(prev => prev.map(t =>
+        t.id === tab.id ? { ...t, socketId: config.id, config, isDirty: false } : t
+      ))
       await refreshSocketConfigs()
-      console.log('[saveCurrentSocket] done, refreshed')
     } catch (e) {
       console.error('[saveCurrentSocket] failed', e)
     }
@@ -899,7 +1013,9 @@ export function PostmanLite() {
     if (tab.socketId) {
       const config: SocketConfig = { ...tab.config, updatedAt: Date.now() }
       dbUpdateSocketConfig(tab.socketId, config).then(() => refreshSocketConfigs())
-      setSocketTabs(prev => prev.map(t => t.id === tab.id ? { ...t, isDirty: false } : t))
+      setSocketTabs(prev => prev.map(t =>
+        t.id === tab.id ? { ...t, config, isDirty: false } : t
+      ))
       return
     }
     setSaveSocketName(tab.config.name || 'New Socket')
@@ -916,54 +1032,82 @@ export function PostmanLite() {
       setSaveCollectionId(collections[0]?.id || '')
       setIsCloseConfirmOpen(true)
     } else {
+      const remainingHttpTabs = tabs.filter(t => t.id !== tabId)
+      const isClosingActive = activeTabId === tabId
       closeTab(tabId)
+      // If no HTTP tabs remain and a socket tab exists, focus the most recent socket tab
+      if (isClosingActive && remainingHttpTabs.length === 0 && socketTabs.length > 0) {
+        const lastSocket = tabOrder.filter(e => e.kind === 'socket').at(-1)
+        const target = lastSocket ? socketTabs.find(t => t.id === lastSocket.id) : socketTabs[socketTabs.length - 1]
+        if (target) setActiveSocketTabId(target.id)
+      }
     }
-  }, [tabs, collections, closeTab])
+  }, [tabs, collections, closeTab, activeTabId, socketTabs, tabOrder, setActiveSocketTabId])
 
   // Unified "close tab" — after handleCloseTab so it's in scope
   const handleUnifiedCloseTab = useCallback((id: string) => {
-    if (socketTabs.some(t => t.id === id)) {
-      closeSocketTab(id)
+    const socketTab = socketTabs.find(t => t.id === id)
+    if (socketTab) {
+      if (socketTab.isDirty) {
+        setPendingCloseSocketTabId(id)
+        setSaveSocketName(socketTab.config.name || 'New Socket')
+        setSaveSocketCollectionId(collections[0]?.id || '')
+        setIsSocketCloseConfirmOpen(true)
+      } else {
+        closeSocketTab(id)
+      }
     } else {
       handleCloseTab(id)
     }
-  }, [socketTabs, closeSocketTab, handleCloseTab])
+  }, [socketTabs, collections, closeSocketTab, handleCloseTab])
+
+  // Stable ref so the keyboard handler always sees current values without
+  // changing the useEffect dep array size (avoids rules-of-hooks violations).
+  const kbStateRef = useRef({ canWrite, activeTabId, activeSocketTabId, tabs, socketTabs })
+  useEffect(() => {
+    kbStateRef.current = { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs }
+  })
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input field (except for saving)
-      const isInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-      
+      const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs } = kbStateRef.current
+
       if (e.ctrlKey && !e.altKey && !e.metaKey) {
         if (e.key.toLowerCase() === 's') {
           e.preventDefault();
           if (canWrite) { if (activeSocketTabId) openSaveSocketDialog(); else openSaveDialog(); }
         } else if (e.key.toLowerCase() === 't') {
           e.preventDefault();
+          setActiveSocketTabId(null);
           createTab();
         } else if (e.key.toLowerCase() === 'w') {
           e.preventDefault();
           const activeId = activeSocketTabId ?? activeTabId;
-          if (activeId) {
-            handleUnifiedCloseTab(activeId);
-          }
+          if (activeId) handleUnifiedCloseTab(activeId);
         } else if (e.key === 'Enter') {
           e.preventDefault();
           executeRequest();
         } else if (e.key === 'Tab') {
           e.preventDefault();
-          if (tabs.length > 1 && activeTabId) {
-            const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+          const allTabs = [
+            ...tabs.map(t => ({ id: t.id, kind: 'request' as const })),
+            ...socketTabs.map(t => ({ id: t.id, kind: 'socket' as const })),
+          ];
+          if (allTabs.length > 1) {
+            const currentId = activeSocketTabId ?? activeTabId;
+            const currentIndex = allTabs.findIndex(t => t.id === currentId);
             if (currentIndex !== -1) {
-              if (e.shiftKey) {
-                // Previous tab
-                const newIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
-                setActiveTab(tabs[newIndex].id);
+              const newIndex = e.shiftKey
+                ? (currentIndex > 0 ? currentIndex - 1 : allTabs.length - 1)
+                : (currentIndex < allTabs.length - 1 ? currentIndex + 1 : 0);
+              const next = allTabs[newIndex];
+              if (next.kind === 'socket') {
+                setActiveSocketTabId(next.id);
+                setActiveTab('');
               } else {
-                // Next tab
-                const newIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
-                setActiveTab(tabs[newIndex].id);
+                setActiveSocketTabId(null);
+                setActiveTab(next.id);
               }
             }
           }
@@ -973,7 +1117,7 @@ export function PostmanLite() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canWrite, activeTabId, activeSocketTabId, tabs, createTab, handleCloseTab, handleUnifiedCloseTab, setActiveTab, openSaveDialog, openSaveSocketDialog, executeRequest]);
+  }, [createTab, handleUnifiedCloseTab, setActiveTab, setActiveSocketTabId, openSaveDialog, openSaveSocketDialog, executeRequest]);
 
   // Import collection handler (also receives socket configs from Postman imports)
   const handleImportCollection = useCallback(async (collection: Collection, importedRequests: RequestConfig[], socketConfigs?: SocketConfig[]) => {
@@ -1087,7 +1231,7 @@ export function PostmanLite() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `postman-lite-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `quence-export-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
   }, [])
@@ -1136,7 +1280,8 @@ export function PostmanLite() {
       }
       for (const seq of (data.sequences ?? [])) {
         const newColId = seq.collectionId ? (colIdMap[seq.collectionId] ?? seq.collectionId) : undefined
-        await db.createSequence({ ...seq, id: generateId(), collectionId: newColId })
+        const newWsId = seq.workspaceId ? (wsIdMap[seq.workspaceId] ?? seq.workspaceId) : activeWorkspaceId
+        await db.createSequence({ ...seq, id: generateId(), collectionId: newColId, workspaceId: newWsId })
       }
       window.location.reload()
     } catch {
@@ -1161,23 +1306,38 @@ export function PostmanLite() {
       onUpdateEnvironment={updateEnvironment}
     >
       <div className="h-screen flex flex-col bg-background">
-        <TitleBar />
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-card">
-        <WorkspaceDropdown
-          workspaces={workspaces}
+        <TitleBar
+          workspaceDropdown={
+            <WorkspaceDropdown
+              workspaces={workspaces}
+              activeWorkspace={activeWorkspace}
+              onSelect={switchWorkspace}
+              onCreate={createWorkspace}
+              onRename={renameWorkspace}
+              onDelete={removeWorkspace}
+              onExport={handleExportWorkspace}
+              onImport={() => workspaceImportRef.current?.click()}
+              onExportAll={handleExportAll}
+              onImportAll={() => allDataImportRef.current?.click()}
+              onManageAccess={ws => setInviteDialogWorkspace(ws)}
+              onUpdateWorkspace={updateWorkspace}
+              getWorkspace={(id) => workspaces.find(w => w.id === id)}
+            />
+          }
+          environments={
+            <EnvironmentSelector
+              environments={environments}
+              activeEnvironment={activeEnvironment}
+              onSelect={setActiveEnvironment}
+            />
+          }
           activeWorkspace={activeWorkspace}
-          onSelect={switchWorkspace}
-          onCreate={createWorkspace}
-          onRename={renameWorkspace}
-          onDelete={removeWorkspace}
-          onExport={handleExportWorkspace}
-          onImport={() => workspaceImportRef.current?.click()}
-          onExportAll={handleExportAll}
-          onImportAll={() => allDataImportRef.current?.click()}
-          onManageAccess={ws => setInviteDialogWorkspace(ws)}
-          onUpdateWorkspace={updateWorkspace}
-          getWorkspace={(id) => workspaces.find(w => w.id === id)}
+          isOwner={isOwner}
+          onOpenMembers={() => activeWorkspace && setInviteDialogWorkspace(activeWorkspace)}
+          onOpenInvite={() => activeWorkspace && setQuickInviteWorkspace(activeWorkspace)}
+          onOpenHelp={() => setIsHelpOpen(true)}
+          onSave={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
+          canSave={canWrite && (!!activeTab || !!activeSocketTab)}
         />
         <input
           ref={workspaceImportRef}
@@ -1194,49 +1354,6 @@ export function PostmanLite() {
           className="hidden"
           onChange={handleImportAllFile}
         />
-        <div className="flex items-center gap-2">
-          <EnvironmentSelector
-            environments={environments}
-            activeEnvironment={activeEnvironment}
-            onSelect={setActiveEnvironment}
-          />
-          {activeWorkspace && isOwner && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => setInviteDialogWorkspace(activeWorkspace)}
-                title="Manage members"
-              >
-                <Users className="h-4 w-4" />
-                {(activeWorkspace.members?.length ?? 0) > 0 && (
-                  <span className="text-xs">{activeWorkspace.members.length}</span>
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => setQuickInviteWorkspace(activeWorkspace)}
-              >
-                <UserPlus className="h-4 w-4" />
-                Invite
-              </Button>
-            </>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
-            disabled={!canWrite || (!activeTab && !activeSocketTab)}
-            title={!canWrite ? 'Read-only access' : undefined}
-          >
-            <Save className="h-4 w-4 mr-2" />
-            Save
-          </Button>
-        </div>
-      </header>
 
       {/* Main content */}
       <ResizablePanelGroup direction="horizontal" className="flex-1">
@@ -1257,6 +1374,18 @@ export function PostmanLite() {
             onMoveRequest={canWrite ? (requestId, targetCollectionId) => updateRequest(requestId, { collectionId: targetCollectionId }) : () => {}}
             onOpenRequest={openRequest}
             onDeleteRequest={canWrite ? removeRequest : () => {}}
+            onRenameRequest={canWrite ? (id, name) => {
+              updateRequest(id, { name })
+              tabs.forEach(t => { if (t.requestId === id) updateTab(t.id, { request: { ...t.request, name }, savedRequest: t.savedRequest ? { ...t.savedRequest, name } : undefined }) })
+              sequences.forEach(seq => {
+                const hasMatch = seq.steps.some(s => s.requestId === id)
+                if (hasMatch) updateSequence(seq.id, { steps: seq.steps.map(s => s.requestId === id ? { ...s, name } : s) })
+              })
+            } : () => {}}
+            onRenameSocketConfig={canWrite ? (id, name) => {
+              dbUpdateSocketConfig(id, { name })
+              setSocketTabs(prev => prev.map(t => t.socketId === id ? { ...t, config: { ...t.config, name } } : t))
+            } : () => {}}
             onSaveRequest={() => {}}
             onImportCollection={canWrite ? handleImportCollection : () => {}}
             socketConfigs={socketConfigs}
@@ -1286,8 +1415,19 @@ export function PostmanLite() {
             {activeView === 'sequences' ? (
               <SequenceBuilder
                 sequences={sequences}
+                workspaceId={safeWorkspaceId}
                 onCreateSequence={createSequence}
-                onUpdateSequence={updateSequence}
+                onUpdateSequence={(id, data) => {
+                  updateSequence(id, data)
+                  // If the name changed, propagate it to any step in other sequences referencing this one
+                  if (data.name !== undefined) {
+                    sequences.forEach(seq => {
+                      if (seq.id === id) return
+                      const hasMatch = seq.steps.some(s => s.type === 'sequence' && s.sequenceId === id)
+                      if (hasMatch) updateSequence(seq.id, { steps: seq.steps.map(s => s.type === 'sequence' && s.sequenceId === id ? { ...s, name: data.name! } : s) })
+                    })
+                  }
+                }}
                 onDeleteSequence={removeSequence}
                 onRunSequence={executeSequence}
                 onStopSequence={stopSequence}
@@ -1306,12 +1446,14 @@ export function PostmanLite() {
             <TabBar
               tabs={tabs}
               socketTabs={socketTabs}
+              tabOrder={tabOrder}
               activeTabId={activeSocketTab ? activeSocketTabId : activeTabId}
               onSelectTab={handleSelectTab}
               onCloseTab={handleUnifiedCloseTab}
               onNewTab={() => { setActiveSocketTabId(null); createTab() }}
               onNewSocketTab={(protocol) => createSocketTab(undefined, protocol)}
               onReorderTabs={reorderTabs}
+              onReorderTabOrder={setTabOrder}
             />
 
             {/* Socket view (full panel, no split) */}
@@ -1330,11 +1472,22 @@ export function PostmanLite() {
                 />
               </div>
             ) : !activeTab ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-4 text-muted-foreground">
-                <p className="text-sm">No open requests</p>
-                <Button variant="outline" size="sm" onClick={() => { setActiveSocketTabId(null); createTab() }}>
-                  New Request
-                </Button>
+              <div className="flex-1 flex flex-col items-center justify-center gap-6 text-muted-foreground">
+                <p className="text-sm">Open a new tab to get started</p>
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" size="sm" onClick={() => { setActiveSocketTabId(null); createTab() }}>
+                    <KeyRound className="h-4 w-4 mr-2" />
+                    New Request
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => { setActiveSocketTabId(null); createSocketTab(undefined, 'ws') }}>
+                    <Braces className="h-4 w-4 mr-2" />
+                    WebSocket
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => { setActiveSocketTabId(null); createSocketTab(undefined, 'socketio') }}>
+                    <Braces className="h-4 w-4 mr-2" />
+                    Socket.IO
+                  </Button>
+                </div>
               </div>
             ) : (
               <>
@@ -1351,7 +1504,7 @@ export function PostmanLite() {
                   onSend={executeRequest}
                   onCancel={cancelRequest}
                   isLoading={isLoading}
-                  readOnly={!canWrite}
+                  readOnly={!canWrite || !!activeTab.isHistorical}
                 />
 
                 {/* Request tabs and response viewer split */}
@@ -1367,7 +1520,7 @@ export function PostmanLite() {
                       onSend={executeRequest}
                       isLoading={isLoading}
                       hideUrlBar
-                      readOnly={!canWrite}
+                      readOnly={!canWrite || !!activeTab.isHistorical}
                       activeRequestTab={requestTabMap[activeTabId!] ?? 'params'}
                       onRequestTabChange={(tab) => setRequestTabMap(prev => ({ ...prev, [activeTabId!]: tab }))}
                     />
@@ -1379,6 +1532,7 @@ export function PostmanLite() {
                     <ResponseViewer
                       response={activeTab?.response || null}
                       isLoading={isLoading}
+                      historyTimestamp={activeTab?.historyTimestamp}
                     />
                   </ResizablePanel>
                 </ResizablePanelGroup>
@@ -1480,6 +1634,7 @@ export function PostmanLite() {
       </div>
 
       <SettingsPanel open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <HelpPanel open={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
       {inviteDialogWorkspace && (
         <WorkspaceInviteDialog
           open={!!inviteDialogWorkspace}
@@ -1650,9 +1805,15 @@ export function PostmanLite() {
               variant="destructive"
               onClick={async () => {
                 if (pendingCloseTabId) {
+                  const remainingHttpTabs = tabs.filter(t => t.id !== pendingCloseTabId)
                   await closeTab(pendingCloseTabId)
                   setPendingCloseTabId(null)
                   setIsCloseConfirmOpen(false)
+                  if (remainingHttpTabs.length === 0 && socketTabs.length > 0) {
+                    const lastSocket = tabOrder.filter(e => e.kind === 'socket').at(-1)
+                    const target = lastSocket ? socketTabs.find(t => t.id === lastSocket.id) : socketTabs[socketTabs.length - 1]
+                    if (target) setActiveSocketTabId(target.id)
+                  }
                 }
               }}
             >
@@ -1661,6 +1822,102 @@ export function PostmanLite() {
             <Button
               onClick={saveCurrentRequest}
               disabled={!saveCollectionId || !saveRequestName.trim()}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Close confirmation dialog for unsaved socket tabs */}
+      <Dialog
+        open={isSocketCloseConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsSocketCloseConfirmOpen(false)
+            setPendingCloseSocketTabId(null)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unsaved changes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This socket has unsaved changes. Save it to a collection before closing, or discard the changes.
+          </p>
+          <div className="space-y-3 pt-1">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Socket Name</label>
+              <Input
+                value={saveSocketName}
+                onChange={(e) => setSaveSocketName(e.target.value)}
+                placeholder="Enter socket name"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Collection</label>
+              {collections.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No collections yet. Create a collection first.</p>
+              ) : (
+                <Select value={saveSocketCollectionId} onValueChange={setSaveSocketCollectionId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a collection" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {collections.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsSocketCloseConfirmOpen(false)
+                setPendingCloseSocketTabId(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingCloseSocketTabId) {
+                  closeSocketTab(pendingCloseSocketTabId)
+                  setPendingCloseSocketTabId(null)
+                  setIsSocketCloseConfirmOpen(false)
+                }
+              }}
+            >
+              Discard
+            </Button>
+            <Button
+              disabled={!saveSocketCollectionId || !saveSocketName.trim()}
+              onClick={async () => {
+                if (!pendingCloseSocketTabId) return
+                const tab = socketTabs.find(t => t.id === pendingCloseSocketTabId)
+                if (!tab || !saveSocketCollectionId || !saveSocketName.trim()) return
+                const config: SocketConfig = { ...tab.config, name: saveSocketName.trim(), collectionId: saveSocketCollectionId, updatedAt: Date.now() }
+                try {
+                  if (tab.socketId) {
+                    await dbUpdateSocketConfig(tab.socketId, config)
+                  } else {
+                    await createSocketConfig(config)
+                  }
+                  await refreshSocketConfigs()
+                } catch (e) {
+                  console.error('[saveSocketOnClose] failed', e)
+                }
+                closeSocketTab(pendingCloseSocketTabId)
+                setPendingCloseSocketTabId(null)
+                setIsSocketCloseConfirmOpen(false)
+              }}
             >
               Save
             </Button>

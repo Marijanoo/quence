@@ -109,8 +109,8 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   // Sequences
-  async getSequences(collectionId?: string): Promise<Sequence[]> {
-    return db().sequences.get(collectionId)
+  async getSequences(workspaceId?: string): Promise<Sequence[]> {
+    return db().sequences.get(workspaceId)
   }
   async createSequence(s: Sequence): Promise<void> {
     await db().sequences.create(s)

@@ -87,6 +87,7 @@ function migrate(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS sequences (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
       collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
       steps TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
@@ -129,6 +130,12 @@ function migrate(db: Database.Database) {
       UNIQUE(workspace_id, invitee_email)
     );
   `)
+
+  // Add workspace_id to sequences if upgrading from an older schema
+  const seqCols = db.prepare("PRAGMA table_info(sequences)").all() as { name: string }[]
+  if (!seqCols.some(c => c.name === 'workspace_id')) {
+    db.exec('ALTER TABLE sequences ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE')
+  }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -321,25 +328,26 @@ export async function dbDeleteSocketConfig(id: string) {
 
 // ── Sequences ─────────────────────────────────────────────────────────────────
 
-export async function dbGetSequences(collectionId?: string) {
-  const rows = (collectionId
-    ? db().prepare('SELECT * FROM sequences WHERE collection_id = ? ORDER BY created_at ASC').all(collectionId)
+export async function dbGetSequences(workspaceId?: string) {
+  const rows = (workspaceId
+    ? db().prepare('SELECT * FROM sequences WHERE workspace_id = ? ORDER BY created_at ASC').all(workspaceId)
     : db().prepare('SELECT * FROM sequences ORDER BY created_at ASC').all()) as any[]
   return rows.map(toSequence)
 }
 
 export async function dbCreateSequence(s: any) {
   db().prepare(
-    'INSERT INTO sequences (id, name, collection_id, steps, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(s.id, s.name, s.collectionId ?? null, JSON.stringify(s.steps ?? []), s.createdAt, s.updatedAt)
+    'INSERT INTO sequences (id, name, workspace_id, collection_id, steps, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(s.id, s.name, s.workspaceId ?? null, s.collectionId ?? null, JSON.stringify(s.steps ?? []), s.createdAt, s.updatedAt)
 }
 
 export async function dbUpdateSequence(id: string, data: any) {
   const sets: string[] = []
   const vals: any[] = []
-  if (data.name !== undefined)         { sets.push('name = ?');          vals.push(data.name) }
-  if (data.collectionId !== undefined) { sets.push('collection_id = ?'); vals.push(data.collectionId) }
-  if (data.steps !== undefined)        { sets.push('steps = ?');         vals.push(JSON.stringify(data.steps)) }
+  if (data.name !== undefined)        { sets.push('name = ?');         vals.push(data.name) }
+  if (data.workspaceId !== undefined) { sets.push('workspace_id = ?'); vals.push(data.workspaceId) }
+  if (data.collectionId !== undefined){ sets.push('collection_id = ?');vals.push(data.collectionId) }
+  if (data.steps !== undefined)       { sets.push('steps = ?');        vals.push(JSON.stringify(data.steps)) }
   if (!sets.length) return
   sets.push('updated_at = ?')
   vals.push(Date.now(), id)
@@ -527,7 +535,7 @@ function toSocketConfig(r: any) {
 
 function toSequence(r: any) {
   return {
-    id: r.id, name: r.name, collectionId: r.collection_id,
+    id: r.id, name: r.name, workspaceId: r.workspace_id, collectionId: r.collection_id,
     steps: parse(r.steps, []),
     createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
   }
