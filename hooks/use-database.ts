@@ -6,6 +6,7 @@ import type {
   Collection,
   RequestConfig,
   SocketConfig,
+  SocketTab,
   HistoryEntry,
   Environment,
   WorkspaceState,
@@ -22,7 +23,7 @@ import {
 import { generateId } from '@/lib/utils'
 import { useAuth } from '@/lib/auth/auth-context'
 
-const ACTIVE_WORKSPACE_KEY = 'postman-lite-active-workspace'
+const ACTIVE_WORKSPACE_KEY = 'quence-active-workspace'
 
 // Compare two requests ignoring volatile fields that change on every edit
 function requestsEqual(a: RequestConfig, b: RequestConfig): boolean {
@@ -328,16 +329,16 @@ export function useSocketConfigs() {
 }
 
 // Sequences hook
-export function useSequences() {
+export function useSequences(workspaceId?: string | null) {
   const { db, isLoading: dbLoading } = useDatabase()
   const [sequences, setSequences] = useState<Sequence[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const refresh = useCallback(async () => {
     if (!db) return
-    const data = await db.getSequences()
+    const data = await db.getSequences(workspaceId ?? undefined)
     setSequences(data.sort((a, b) => a.createdAt - b.createdAt))
-  }, [db])
+  }, [db, workspaceId])
 
   useEffect(() => {
     if (db && !dbLoading) {
@@ -484,13 +485,17 @@ export function useWorkspace(workspaceId?: string | null) {
       setIsLoading(true)
       const saved = await db.getWorkspaceState(workspaceId)
       if (saved) {
-        // Re-hydrate saved tabs: fetch fresh request data from DB for any saved request,
-        // so unsaved local edits from other users never bleed through.
+        // Re-hydrate saved tabs: fetch fresh saved version from DB as the baseline,
+        // but restore any local edits that were persisted (isDirty tabs keep their request).
         const hydratedTabs = await Promise.all(
           saved.tabs.map(async (tab) => {
             if (!tab.requestId) return tab
             const fresh = await db.getRequest(tab.requestId)
             if (!fresh) return tab
+            // If the tab had unsaved local edits, restore them with the fresh DB version as savedRequest
+            if (tab.isDirty && tab.request && tab.request.id) {
+              return { ...tab, savedRequest: fresh, isDirty: true }
+            }
             return { ...tab, request: fresh, savedRequest: fresh, isDirty: false }
           })
         )
@@ -510,25 +515,15 @@ export function useWorkspace(workspaceId?: string | null) {
     })()
   }, [db, dbLoading, workspaceId])
 
-  // Persist state to DB, but strip request bodies from saved-request tabs so
-  // unsaved local edits are never written to the shared workspace state.
   const saveState = useCallback(async (newState: WorkspaceState) => {
     if (!db || !workspaceId) return
     setState(newState)
-    const stripped: WorkspaceState = {
-      ...newState,
-      tabs: newState.tabs.map((tab) =>
-        tab.requestId
-          ? { ...tab, request: { id: tab.requestId } as RequestConfig, isDirty: false }
-          : tab
-      ),
-    }
-    await db.saveWorkspaceState(workspaceId, stripped)
+    await db.saveWorkspaceState(workspaceId, newState)
   }, [db, workspaceId])
 
   const activeTab = state.tabs.find(t => t.id === state.activeTabId)
 
-  const createTab = useCallback(async (request?: RequestConfig, requestId?: string) => {
+  const createTab = useCallback(async (request?: RequestConfig, requestId?: string, extra?: Partial<WorkspaceTab>) => {
     const resolvedRequest = request || createNewRequest()
     const newTab: WorkspaceTab = {
       id: generateId(),
@@ -537,6 +532,7 @@ export function useWorkspace(workspaceId?: string | null) {
       savedRequest: requestId ? resolvedRequest : undefined,
       response: null,
       isDirty: false,
+      ...extra,
     }
     await saveState({ tabs: [...state.tabs, newTab], activeTabId: newTab.id })
     return newTab
@@ -584,10 +580,23 @@ export function useWorkspace(workspaceId?: string | null) {
     await saveState({ ...state, tabs: reordered })
   }, [state, saveState])
 
+  const saveSocketState = useCallback(async (socketTabs: SocketTab[], activeSocketTabId: string | null, tabOrder: { id: string; kind: 'http' | 'socket' }[]) => {
+    if (!db || !workspaceId) return
+    // Read the current persisted state directly from DB rather than merging with
+    // in-memory `state` — avoids adding `state` as a dependency which would cause
+    // an infinite loop (setState → new saveSocketState ref → effect re-fires).
+    const current = await db.getWorkspaceState(workspaceId)
+    if (!current) return
+    await db.saveWorkspaceState(workspaceId, { ...current, socketTabs, activeSocketTabId, tabOrder })
+  }, [db, workspaceId])
+
   return {
     tabs: state.tabs,
     activeTab,
     activeTabId: state.activeTabId,
+    savedSocketTabs: state.socketTabs ?? [],
+    savedActiveSocketTabId: state.activeSocketTabId ?? null,
+    savedTabOrder: state.tabOrder ?? null,
     isLoading: isLoading || dbLoading,
     createTab,
     closeTab,
@@ -597,5 +606,6 @@ export function useWorkspace(workspaceId?: string | null) {
     setActiveResponse,
     markTabSaved,
     reorderTabs,
+    saveSocketState,
   }
 }

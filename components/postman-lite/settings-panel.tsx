@@ -32,24 +32,24 @@ interface Settings {
   jsonKey:     OklchColor
   jsonString:  OklchColor
   jsonNumber:  OklchColor
-  jsonBoolean: 'accent' | OklchColor  // 'accent' means follow the accent color
+  jsonBoolean: OklchColor
 }
 
 const DEFAULTS: Settings = {
-  accent:      { l: 0.72, c: 0.19, h: 160 },
-  bgL:         0.12,
+  accent:      { l: 0.9,  c: 0.11, h: 98  },
+  bgL:         0.28,
   bgC:         0.01,
-  bgH:         260,
-  fgL:         0.95,
-  mutedL:      0.55,
+  bgH:         282,
+  fgL:         0.97,
+  mutedL:      0.85,
   destructive: { l: 0.55, c: 0.22, h: 25 },
-  jsonKey:     { l: 0.70, c: 0.12, h: 280 },
-  jsonString:  { l: 0.75, c: 0.15, h: 160 },
-  jsonNumber:  { l: 0.75, c: 0.15, h: 55  },
-  jsonBoolean: 'accent',
+  jsonKey:     { l: 0.90, c: 0.10, h: 100 },
+  jsonString:  { l: 0.76, c: 0.15, h: 160 },
+  jsonNumber:  { l: 0.90, c: 0.13, h: 246 },
+  jsonBoolean: { l: 0.89, c: 0.19, h: 15  },
 }
 
-const STORAGE_KEY = 'postman-lite-theme'
+const STORAGE_KEY = 'quence-theme'
 
 function clampSettings(s: Settings): Settings {
   const clampL = (l: number) => Math.min(0.90, Math.max(0.35, l))
@@ -71,7 +71,7 @@ function clampSettings(s: Settings): Settings {
     jsonKey: clampColor(s.jsonKey),
     jsonString: clampColor(s.jsonString),
     jsonNumber: clampColor(s.jsonNumber),
-    jsonBoolean: s.jsonBoolean === 'accent' ? 'accent' : clampColor(s.jsonBoolean),
+    jsonBoolean: clampColor(s.jsonBoolean),
   }
 }
 
@@ -131,7 +131,7 @@ function applySettings(s: Settings) {
   setRaw('--json-key',     fmt(s.jsonKey))
   setRaw('--json-string',  fmt(s.jsonString))
   setRaw('--json-number',  fmt(s.jsonNumber))
-  setRaw('--json-boolean', s.jsonBoolean === 'accent' ? fmt(s.accent) : fmt(s.jsonBoolean))
+  setRaw('--json-boolean', fmt(s.jsonBoolean))
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ function JsonPreview({ s }: { s: Settings }) {
   const keyColor   = fmt(s.jsonKey)
   const strColor   = fmt(s.jsonString)
   const numColor   = fmt(s.jsonNumber)
-  const boolColor  = s.jsonBoolean === 'accent' ? fmt(s.accent) : fmt(s.jsonBoolean)
+  const boolColor  = fmt(s.jsonBoolean)
   const mutedColor = `oklch(${s.mutedL.toFixed(3)} 0 0)`
 
   return (
@@ -222,7 +222,7 @@ export function SettingsPanel({ open, onClose }: Props) {
     applySettings(loaded)
   }, [])
 
-  const saveDebounced = useDebouncedCallback((next: Settings) => {
+  const [saveDebounced] = useDebouncedCallback((next: Settings) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
   }, 300)
 
@@ -345,25 +345,9 @@ export function SettingsPanel({ open, onClose }: Props) {
               onChange={c => update(prev => ({ ...prev, jsonNumber: c }))} />
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Booleans</span>
-                <button
-                  onClick={() => update(prev => ({
-                    ...prev,
-                    jsonBoolean: prev.jsonBoolean === 'accent'
-                      ? { l: 0.72, c: 0.19, h: 160 }
-                      : 'accent',
-                  }))}
-                  className="text-[11px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
-                >
-                  {s.jsonBoolean === 'accent' ? 'Following accent' : 'Custom'}
-                </button>
-              </div>
-              {s.jsonBoolean !== 'accent' && (
-                <ColorSection label="" color={s.jsonBoolean} showSwatch={false}
-                  onChange={c => update(prev => ({ ...prev, jsonBoolean: c }))} />
-              )}
-              <Swatch color={s.jsonBoolean === 'accent' ? s.accent : s.jsonBoolean} />
+              <ColorSection label="Booleans" color={s.jsonBoolean} showSwatch={false}
+                onChange={c => update(prev => ({ ...prev, jsonBoolean: c }))} />
+              <Swatch color={s.jsonBoolean} />
             </div>
           </section>
 

@@ -280,52 +280,62 @@ export function JsonFormatter({ input, onInputChange }: { input: string; onInput
         ) : (
           <div ref={outputRef} className="flex-1 min-h-0 overflow-auto p-4">
             <pre className="font-mono text-xs leading-relaxed">
-              {lines.map((line, i) => {
-                if (hiddenLines.has(i)) return null
+              {(() => {
+                const lineNumWidth = String(lines.length).length
+                return lines.map((line, i) => {
+                  if (hiddenLines.has(i)) return null
 
-                const offset = lineOffsets[i] ?? 0
-                const count = lineCounts[i] ?? 0
-                const localActive = activeMatch - offset
-                const hasActive = !!query && localActive >= 0 && localActive < count
-                const isFoldable = foldRanges.has(i)
-                const isCollapsed = collapsed.has(i)
-                const closer = foldRanges.get(i)
+                  const offset = lineOffsets[i] ?? 0
+                  const count = lineCounts[i] ?? 0
+                  const localActive = activeMatch - offset
+                  const hasActive = !!query && localActive >= 0 && localActive < count
+                  const isFoldable = foldRanges.has(i)
+                  const isCollapsed = collapsed.has(i)
+                  const closer = foldRanges.get(i)
 
-                const displayLine = isCollapsed && closer !== undefined
-                  ? foldSummary(line, lines[closer], closer - i - 1)
-                  : line
+                  const displayLine = isCollapsed && closer !== undefined
+                    ? foldSummary(line, lines[closer], closer - i - 1)
+                    : line
 
-                return (
-                  <div
-                    key={i}
-                    ref={hasActive ? (el => { activeMatchRef.current = el }) : undefined}
-                    className="group flex items-start"
-                  >
-                    {/* Fold gutter */}
-                    <span
-                      className={`inline-block w-4 shrink-0 text-center select-none cursor-default mr-1 ${
-                        isFoldable ? 'text-muted-foreground hover:text-foreground cursor-pointer' : ''
-                      }`}
-                      onClick={isFoldable ? () => toggleFold(i) : undefined}
-                      title={isFoldable ? (isCollapsed ? 'Expand' : 'Collapse') : undefined}
+                  return (
+                    <div
+                      key={i}
+                      ref={hasActive ? (el => { activeMatchRef.current = el }) : undefined}
+                      className="group flex items-start"
                     >
-                      {isFoldable ? (isCollapsed ? '▶' : '▼') : ''}
-                    </span>
-                    <span className="flex-1">
-                      {isCollapsed ? (
-                        <span
-                          className="cursor-pointer"
-                          onClick={() => toggleFold(i)}
-                        >
+                      {/* Line number */}
+                      <span
+                        className="shrink-0 select-none text-right text-muted-foreground/40 mr-3 tabular-nums"
+                        style={{ width: `${lineNumWidth}ch` }}
+                      >
+                        {i + 1}
+                      </span>
+                      {/* Fold gutter */}
+                      <span
+                        className={`inline-block w-4 shrink-0 text-center select-none cursor-default mr-1 ${
+                          isFoldable ? 'text-muted-foreground hover:text-foreground cursor-pointer' : ''
+                        }`}
+                        onClick={isFoldable ? () => toggleFold(i) : undefined}
+                        title={isFoldable ? (isCollapsed ? 'Expand' : 'Collapse') : undefined}
+                      >
+                        {isFoldable ? (isCollapsed ? '▶' : '▼') : ''}
+                      </span>
+                      <span className="flex-1">
+                        {isCollapsed ? (
+                          <span
+                            className="cursor-pointer"
+                            onClick={() => toggleFold(i)}
+                          >
+                            <JsonLineHighlighted line={displayLine} query={query} matchOffset={offset} activeMatch={activeMatch} />
+                          </span>
+                        ) : (
                           <JsonLineHighlighted line={displayLine} query={query} matchOffset={offset} activeMatch={activeMatch} />
-                        </span>
-                      ) : (
-                        <JsonLineHighlighted line={displayLine} query={query} matchOffset={offset} activeMatch={activeMatch} />
-                      )}
-                    </span>
-                  </div>
-                )
-              })}
+                        )}
+                      </span>
+                    </div>
+                  )
+                })
+              })()}
             </pre>
           </div>
         )}

@@ -13,8 +13,8 @@ import type {
   Sequence,
 } from './types'
 
-const DB_NAME = 'postman-lite'
-const DB_VERSION = 4
+const DB_NAME = 'quence'
+const DB_VERSION = 5
 
 interface PostmanLiteDB {
   workspaces: Workspace
@@ -32,7 +32,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
   async init(): Promise<void> {
     this.db = await openDB<PostmanLiteDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
+      upgrade(db, oldVersion, _newVersion, transaction) {
         if (oldVersion < 1) {
           db.createObjectStore('collections', { keyPath: 'id' })
           const requestStore = db.createObjectStore('requests', { keyPath: 'id' })
@@ -57,6 +57,12 @@ export class IndexedDBAdapter implements DatabaseAdapter {
           if (!db.objectStoreNames.contains('sequences')) {
             const seqStore = db.createObjectStore('sequences', { keyPath: 'id' })
             seqStore.createIndex('collectionId', 'collectionId')
+          }
+        }
+        if (oldVersion < 5) {
+          const seqStore = transaction.objectStore('sequences')
+          if (!seqStore.indexNames.contains('workspaceId')) {
+            seqStore.createIndex('workspaceId', 'workspaceId')
           }
         }
       },
@@ -138,7 +144,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     for (const s of sockets) {
       await db.delete('socketConfigs', s.id)
     }
-    const seqs = await this.getSequences(id)
+    const seqs = await db.getAllFromIndex('sequences', 'collectionId', id)
     for (const s of seqs) {
       await db.delete('sequences', s.id)
     }
@@ -200,10 +206,10 @@ export class IndexedDBAdapter implements DatabaseAdapter {
   }
 
   // Sequences
-  async getSequences(collectionId?: string): Promise<Sequence[]> {
+  async getSequences(workspaceId?: string): Promise<Sequence[]> {
     const db = this.getDb()
-    if (collectionId) {
-      return db.getAllFromIndex('sequences', 'collectionId', collectionId)
+    if (workspaceId) {
+      return db.getAllFromIndex('sequences', 'workspaceId', workspaceId)
     }
     return db.getAll('sequences')
   }

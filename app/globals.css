@@ -5,32 +5,32 @@
 
 :root {
   /* Dark theme by default for developer tool */
-  --background: oklch(0.12 0.01 260);
-  --foreground: oklch(0.95 0 0);
-  --card: oklch(0.16 0.01 260);
-  --card-foreground: oklch(0.95 0 0);
-  --popover: oklch(0.18 0.01 260);
-  --popover-foreground: oklch(0.95 0 0);
-  --primary: oklch(0.72 0.19 160);
-  --primary-foreground: oklch(0.12 0.01 260);
-  --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.85 0 0);
-  --muted: oklch(0.2 0.01 260);
-  --muted-foreground: oklch(0.6 0 0);
-  --accent: oklch(0.72 0.19 160);
-  --accent-foreground: oklch(0.12 0.01 260);
+  --background: oklch(0.28 0.01 282);
+  --foreground: oklch(0.97 0 0);
+  --card: oklch(0.32 0.01 282);
+  --card-foreground: oklch(0.97 0 0);
+  --popover: oklch(0.34 0.01 282);
+  --popover-foreground: oklch(0.97 0 0);
+  --primary: oklch(0.9 0.11 98);
+  --primary-foreground: oklch(0.28 0.01 282);
+  --secondary: oklch(0.38 0.01 282);
+  --secondary-foreground: oklch(0.97 0 0);
+  --muted: oklch(0.36 0.01 282);
+  --muted-foreground: oklch(0.85 0 0);
+  --accent: oklch(0.9 0.11 98);
+  --accent-foreground: oklch(0.28 0.01 282);
   --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.95 0 0);
-  --border: oklch(0.26 0.01 260);
-  --input: oklch(0.2 0.01 260);
-  --ring: oklch(0.72 0.19 160);
+  --destructive-foreground: oklch(0.97 0 0);
+  --border: oklch(0.42 0.01 282);
+  --input: oklch(0.36 0.01 282);
+  --ring: oklch(0.9 0.11 98);
   --radius: 0.5rem;
 
   /* JSON syntax colors (overridden by settings panel) */
-  --json-key:     oklch(0.70 0.12 280);
-  --json-string:  oklch(0.75 0.15 160);
-  --json-number:  oklch(0.75 0.15 55);
-  --json-boolean: oklch(0.72 0.19 160);
+  --json-key:     oklch(0.90 0.10 100);
+  --json-string:  oklch(0.76 0.15 160);
+  --json-number:  oklch(0.90 0.13 246);
+  --json-boolean: oklch(0.89 0.19 15);
 
   /* Method badge colors */
   --method-get: oklch(0.88 0.15 140);
@@ -40,25 +40,25 @@
   --method-delete: oklch(0.88 0.14 15);
   --method-head: oklch(0.88 0.11 195);
   --method-options: oklch(0.75 0.04 0);
-  
+
   /* Status colors */
   --status-success: oklch(0.72 0.19 160);
   --status-redirect: oklch(0.65 0.2 250);
   --status-client-error: oklch(0.75 0.18 80);
   --status-server-error: oklch(0.65 0.22 25);
-  
+
   /* Sidebar */
-  --sidebar: oklch(0.14 0.01 260);
-  --sidebar-foreground: oklch(0.95 0 0);
-  --sidebar-primary: oklch(0.72 0.19 160);
-  --sidebar-primary-foreground: oklch(0.12 0.01 260);
-  --sidebar-accent: oklch(0.22 0.01 260);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.26 0.01 260);
-  --sidebar-ring: oklch(0.72 0.19 160);
-  
+  --sidebar: oklch(0.30 0.01 282);
+  --sidebar-foreground: oklch(0.97 0 0);
+  --sidebar-primary: oklch(0.9 0.11 98);
+  --sidebar-primary-foreground: oklch(0.28 0.01 282);
+  --sidebar-accent: oklch(0.38 0.01 282);
+  --sidebar-accent-foreground: oklch(0.97 0 0);
+  --sidebar-border: oklch(0.42 0.01 282);
+  --sidebar-ring: oklch(0.9 0.11 98);
+
   /* Chart colors */
-  --chart-1: oklch(0.72 0.19 160);
+  --chart-1: oklch(0.9 0.11 98);
   --chart-2: oklch(0.75 0.18 80);
   --chart-3: oklch(0.65 0.2 250);
   --chart-4: oklch(0.7 0.15 300);

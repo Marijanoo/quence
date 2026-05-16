@@ -23,7 +23,7 @@ const commonHeaders = [
   { key: 'Accept', value: 'application/json' },
   { key: 'Authorization', value: 'Bearer ' },
   { key: 'Cache-Control', value: 'no-cache' },
-  { key: 'User-Agent', value: 'Postman Lite' },
+  { key: 'User-Agent', value: 'Quence' },
 ]
 
 export function HeadersTab({ headers, onChange, readOnly }: HeadersTabProps) {

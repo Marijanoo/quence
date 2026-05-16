@@ -46,7 +46,7 @@ export interface DatabaseAdapter {
   deleteEnvironment(id: string): Promise<void>
   setActiveEnvironment(id: string | null, workspaceId?: string): Promise<void>
 
-  getSequences(collectionId?: string): Promise<Sequence[]>
+  getSequences(workspaceId?: string): Promise<Sequence[]>
   createSequence(seq: Sequence): Promise<void>
   updateSequence(id: string, data: Partial<Sequence>): Promise<void>
   deleteSequence(id: string): Promise<void>

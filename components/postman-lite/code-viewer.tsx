@@ -4,6 +4,9 @@ import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { SearchBar } from './search-bar'
 import { computeFoldRanges, computeHiddenLines, foldSummary } from '@/lib/json-fold'
 
+const LINE_HEIGHT = 20 // px — must match leading-relaxed at text-xs (0.75rem * 1.625 ≈ 20px)
+const OVERSCAN = 40   // extra lines rendered above/below viewport
+
 interface CodeViewerProps {
   data: string
   language?: 'json' | 'html' | 'auto'
@@ -106,15 +109,18 @@ function HtmlViewer({ data }: { data: string }) {
   )
 }
 
-// ── JSON viewer with folding ───────────────────────────────────────────────────
+// ── JSON viewer with folding + virtual scrolling ─────────────────────────────
 
-function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
+function JsonViewer({ data, query, activeMatch, activeMatchRef, scrollRef }: {
   data: string
   query: string
   activeMatch: number
   activeMatchRef: React.RefObject<HTMLElement | null>
+  scrollRef: React.RefObject<HTMLDivElement | null>
 }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(600)
 
   const lines = useMemo(() => {
     try { return JSON.stringify(JSON.parse(data), null, 2).split('\n') }
@@ -126,6 +132,15 @@ function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
   const foldRanges = useMemo(() => computeFoldRanges(lines), [lines])
   const hiddenLines = useMemo(() => computeHiddenLines(collapsed, foldRanges, lines.length), [collapsed, foldRanges, lines.length])
 
+  // Visible line index list (collapsed ranges removed)
+  const visibleLineIndices = useMemo(() => {
+    const out: number[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (!hiddenLines.has(i)) out.push(i)
+    }
+    return out
+  }, [lines, hiddenLines])
+
   const lineOffsets = useMemo(() => {
     const offsets: number[] = []
     let cum = 0
@@ -136,6 +151,27 @@ function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
     return offsets
   }, [lines, hiddenLines, query])
 
+  // Track scroll position and viewport height from parent scroll container
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => setScrollTop(el.scrollTop)
+    const ro = new ResizeObserver(() => setViewportHeight(el.clientHeight))
+    el.addEventListener('scroll', onScroll, { passive: true })
+    ro.observe(el)
+    setScrollTop(el.scrollTop)
+    setViewportHeight(el.clientHeight)
+    return () => { el.removeEventListener('scroll', onScroll); ro.disconnect() }
+  }, [scrollRef])
+
+  const totalHeight = visibleLineIndices.length * LINE_HEIGHT
+
+  const startVisibleIdx = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN)
+  const endVisibleIdx = Math.min(visibleLineIndices.length - 1, Math.ceil((scrollTop + viewportHeight) / LINE_HEIGHT) + OVERSCAN)
+
+  const paddingTop = startVisibleIdx * LINE_HEIGHT
+  const paddingBottom = Math.max(0, (visibleLineIndices.length - 1 - endVisibleIdx) * LINE_HEIGHT)
+
   const toggleFold = useCallback((i: number) => {
     setCollapsed(prev => {
       const next = new Set(prev)
@@ -144,27 +180,36 @@ function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
     })
   }, [])
 
+  const lineNumWidth = String(lines.length).length
+
   return (
-    <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
-      {lines.map((line, i) => {
-        if (hiddenLines.has(i)) return null
+    <pre className="font-mono text-xs leading-relaxed whitespace-pre" style={{ minHeight: totalHeight, minWidth: 'max-content' }}>
+      {paddingTop > 0 && <div style={{ height: paddingTop }} aria-hidden />}
+      {visibleLineIndices.slice(startVisibleIdx, endVisibleIdx + 1).map((i) => {
         const offset = lineOffsets[i] ?? 0
-        const count = countMatches(line, query)
+        const count = countMatches(lines[i], query)
         const localActive = activeMatch - offset
         const hasActive = !!query && localActive >= 0 && localActive < count
         const isFoldable = foldRanges.has(i)
         const isCollapsed = collapsed.has(i)
         const closer = foldRanges.get(i)
         const displayLine = isCollapsed && closer !== undefined
-          ? foldSummary(line, lines[closer], closer - i - 1)
-          : line
+          ? foldSummary(lines[i], lines[closer], closer - i - 1)
+          : lines[i]
 
         return (
           <div
             key={i}
             ref={hasActive ? (el => { (activeMatchRef as React.MutableRefObject<HTMLElement | null>).current = el }) : undefined}
             className="flex items-start"
+            style={{ height: LINE_HEIGHT }}
           >
+            <span
+              className="shrink-0 select-none text-right text-muted-foreground/40 mr-3 tabular-nums"
+              style={{ width: `${lineNumWidth}ch` }}
+            >
+              {i + 1}
+            </span>
             <span
               className={`inline-block w-4 shrink-0 text-center select-none mr-1 ${isFoldable ? 'text-muted-foreground hover:text-foreground cursor-pointer' : 'cursor-default'}`}
               onClick={isFoldable ? () => toggleFold(i) : undefined}
@@ -180,6 +225,7 @@ function JsonViewer({ data, query, activeMatch, activeMatchRef }: {
           </div>
         )
       })}
+      {paddingBottom > 0 && <div style={{ height: paddingBottom }} aria-hidden />}
     </pre>
   )
 }
@@ -191,6 +237,7 @@ export function CodeViewer({ data, language = 'auto', className }: CodeViewerPro
   const [query, setQuery] = useState('')
   const [currentMatch, setCurrentMatch] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const activeMatchRef = useRef<HTMLElement | null>(null)
 
   const isJson = useMemo(() => {
@@ -230,7 +277,7 @@ export function CodeViewer({ data, language = 'auto', className }: CodeViewerPro
   }, [openSearch])
 
   return (
-    <div ref={containerRef} className={`relative outline-none ${className || ''}`} tabIndex={0} onKeyDown={handleKeyDown}>
+    <div ref={containerRef} className={`relative outline-none flex flex-col h-full ${className || ''}`} tabIndex={0} onKeyDown={handleKeyDown}>
       {searchOpen && (
         <div className="sticky top-0 z-10">
           <SearchBar
@@ -245,8 +292,8 @@ export function CodeViewer({ data, language = 'auto', className }: CodeViewerPro
         </div>
       )}
       {isJson ? (
-        <div className="p-4">
-          <JsonViewer data={data} query={searchOpen ? query : ''} activeMatch={currentMatch} activeMatchRef={activeMatchRef} />
+        <div ref={scrollContainerRef} className="flex-1 overflow-auto p-4 min-w-0">
+          <JsonViewer data={data} query={searchOpen ? query : ''} activeMatch={currentMatch} activeMatchRef={activeMatchRef} scrollRef={scrollContainerRef} />
         </div>
       ) : (
         <HtmlViewer data={data} />

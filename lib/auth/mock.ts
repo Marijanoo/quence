@@ -1,6 +1,6 @@
 import type { AuthSession } from './types'
 
-const SESSION_KEY = 'postman-lite-session'
+const SESSION_KEY = 'quence-session'
 
 function emailToId(email: string): string {
   let hash = 0

@@ -15,8 +15,8 @@
     "build:electron-mac": "npm run build && npm run build:electron && electron-builder --mac"
   },
   "build": {
-    "appId": "com.postmanlite.app",
-    "productName": "Postman Lite",
+    "appId": "com.quence.app",
+    "productName": "Quence",
     "directories": {
       "output": "dist"
     },

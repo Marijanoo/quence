@@ -31,6 +31,7 @@ async function createWindow() {
     width: 1200,
     height: 800,
     frame: false,
+    icon: path.join(__dirname, '..', 'public', 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -94,6 +95,14 @@ app.on('ready', () => {
     }
   })
   ipcMain.on('window-close', () => mainWindow?.close())
+  ipcMain.on('window-zoom-in', () => {
+    if (!mainWindow) return
+    mainWindow.webContents.setZoomLevel(mainWindow.webContents.getZoomLevel() + 0.5)
+  })
+  ipcMain.on('window-zoom-out', () => {
+    if (!mainWindow) return
+    mainWindow.webContents.setZoomLevel(mainWindow.webContents.getZoomLevel() - 0.5)
+  })
 
   // ── WebSocket proxy ─────────────────────────────────────────────────────────
   type SocketHandle = { send: (data: string) => void; close: () => void }

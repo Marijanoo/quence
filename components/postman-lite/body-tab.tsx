@@ -90,7 +90,7 @@ export function BodyTab({
           <VariableHighlightTextarea
             value={content}
             onChange={onContentChange}
-            placeholder={bodyType === 'json' ? '{\n  "key": "value"\n}' : 'Raw body content'}
+            placeholder={bodyType === 'json' ? '{ "key": "value" }' : 'Raw body content'}
             variables={variables}
             onUpdateVariable={updateVariable}
             language={bodyType === 'json' ? 'json' : 'text'}
