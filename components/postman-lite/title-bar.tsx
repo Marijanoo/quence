@@ -36,7 +36,7 @@ interface TitleBarProps {
 }
 
 function Sep() {
-  return <div className="w-px h-3.5 bg-border mx-1 shrink-0" />
+  return <div className="w-px h-3.5 bg-border mx-1 shrink-0 self-center" />
 }
 
 function TitleBtn({
@@ -330,11 +330,11 @@ export function TitleBar({
 
   return (
     <div
-      className="flex items-center h-8 bg-card border-b border-border select-none"
+      className="flex items-stretch h-8 bg-card border-b border-border select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Logo */}
-      <div className="flex items-center gap-1.5 px-3 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <div className="flex items-center gap-1.5 px-3 shrink-0 self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <Image src="/logo.png" alt="Quence" width={14} height={14} className="shrink-0" />
         <span className="text-xs font-medium text-muted-foreground">Quence</span>
       </div>
@@ -343,7 +343,7 @@ export function TitleBar({
 
       {/* Workspace dropdown */}
       {workspaceDropdown && (
-        <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div className="self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {workspaceDropdown}
         </div>
       )}
@@ -353,7 +353,7 @@ export function TitleBar({
       {/* Environment selector */}
       {environments && (
         <>
-          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div className="self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             {environments}
           </div>
           <Sep />
@@ -361,11 +361,11 @@ export function TitleBar({
       )}
 
       {/* Draggable spacer */}
-      <div className="flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+      <div className="flex-1 self-stretch" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
       {/* Right side actions */}
       <div
-        className="flex items-center gap-0.5 px-2"
+        className="flex items-center gap-0.5 self-stretch pl-2"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {/* Members + Invite dropdowns (owner only) */}
