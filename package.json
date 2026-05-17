@@ -1,6 +1,6 @@
 {
   "name": "quence",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node server.mjs",
@@ -47,7 +47,8 @@
     },
     "win": {
       "icon": "public/logo.ico",
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
