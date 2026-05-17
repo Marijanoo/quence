@@ -1,6 +1,6 @@
 {
   "name": "quence",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node server.mjs",
@@ -41,8 +41,20 @@
     "mac": {
       "icon": "public/logo.icns",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
     },
     "win": {
@@ -51,8 +63,7 @@
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "differentialPackage": true
