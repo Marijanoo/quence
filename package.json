@@ -1,6 +1,6 @@
 {
   "name": "my-project",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node server.mjs",
@@ -11,8 +11,8 @@
     "electron:dev": "concurrently --kill-others \"npm run dev\" \"wait-on tcp:3000 && npm run build:electron && electron .\"",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "electron:build": "npm run build && npm run build:electron && electron-builder",
-    "build:electron-win": "npm run build && npm run build:electron && electron-builder --win",
-    "build:electron-mac": "npm run build && npm run build:electron && electron-builder --mac"
+    "build:electron-win": "npm run build && npm run build:electron && electron-builder --win --publish never",
+    "build:electron-mac": "npm run build && npm run build:electron && electron-builder --mac --publish never"
   },
   "build": {
     "appId": "com.quence.app",
