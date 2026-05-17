@@ -431,6 +431,9 @@ if (isProd) {
 
   autoUpdater.on('error', () => {})
 
+  // Swallow any unhandled rejections from electron-updater (e.g. 404 when release not yet published)
+  process.on('unhandledRejection', () => {})
+
   ipcMain.on('install-update', () => {
     autoUpdater.quitAndInstall()
   })
