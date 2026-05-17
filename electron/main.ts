@@ -406,7 +406,8 @@ app.on('window-all-closed', () => {
 
 // Auto-updater — only runs in production builds
 if (isProd) {
-  autoUpdater.checkForUpdatesAndNotify()
+  autoUpdater.logger = null
+  autoUpdater.autoDownload = true
 
   autoUpdater.on('update-available', () => {
     mainWindow?.webContents.send('update-available')
@@ -422,6 +423,13 @@ if (isProd) {
 
   ipcMain.on('install-update', () => {
     autoUpdater.quitAndInstall()
+  })
+
+  // Delay check until window is ready so a failed update check can't crash the renderer
+  app.on('browser-window-created', (_, win) => {
+    win.webContents.once('did-finish-load', () => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    })
   })
 }
 
