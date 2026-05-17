@@ -33,8 +33,11 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
-          path: dist/*.exe
+          name: windows-artifacts
+          path: |
+            dist/*.exe
+            dist/*.yml
+            dist/*.blockmap
 
   build-mac:
     runs-on: macos-latest
@@ -57,8 +60,12 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mac-installer
-          path: dist/*.dmg
+          name: mac-artifacts
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.yml
+            dist/*.blockmap
 
   release:
     needs: [build-windows, build-mac]
@@ -67,16 +74,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download Windows artifact
+      - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-installer
+          name: windows-artifacts
           path: dist
 
-      - name: Download Mac artifact
+      - name: Download Mac artifacts
         uses: actions/download-artifact@v4
         with:
-          name: mac-installer
+          name: mac-artifacts
           path: dist
 
       - name: Create GitHub Release
