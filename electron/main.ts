@@ -32,7 +32,7 @@ async function createWindow() {
     width: 1200,
     height: 800,
     frame: false,
-    icon: path.join(__dirname, '..', 'public', 'logo.png'),
+    icon: path.join(__dirname, '..', 'public', process.platform === 'win32' ? 'logo.ico' : 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -65,7 +65,10 @@ async function createWindow() {
   }
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.control && (input.key === '=' || input.key === '+')) {
+    if (input.key === 'F12') {
+      mainWindow!.webContents.toggleDevTools()
+      event.preventDefault()
+    } else if (input.control && (input.key === '=' || input.key === '+')) {
       const currentZoom = mainWindow!.webContents.getZoomLevel()
       mainWindow!.webContents.setZoomLevel(currentZoom + 0.5)
       event.preventDefault()
@@ -408,6 +411,11 @@ app.on('window-all-closed', () => {
 if (isProd) {
   autoUpdater.logger = null
   autoUpdater.autoDownload = true
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'Marijanoo',
+    repo: 'quence',
+  })
 
   autoUpdater.on('update-available', () => {
     mainWindow?.webContents.send('update-available')
@@ -420,6 +428,8 @@ if (isProd) {
   autoUpdater.on('update-downloaded', () => {
     mainWindow?.webContents.send('update-downloaded')
   })
+
+  autoUpdater.on('error', () => {})
 
   ipcMain.on('install-update', () => {
     autoUpdater.quitAndInstall()
