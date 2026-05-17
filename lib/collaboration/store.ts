@@ -75,7 +75,7 @@ export async function getInvitesForWorkspace(workspaceId: string): Promise<Works
 export async function acceptInvite(inviteId: string, allInvites: WorkspaceInvite[]): Promise<WorkspaceInvite> {
   const invite = allInvites.find(i => i.id === inviteId)
   if (!invite) throw new Error('Invite not found')
-  await api('DELETE', `/workspaces/invites/${inviteId}`)
+  await api('POST', `/workspaces/invites/${inviteId}/accept`)
   return invite
 }
 
@@ -85,6 +85,10 @@ export async function declineInvite(inviteId: string): Promise<void> {
 
 export async function revokeInvite(inviteId: string): Promise<void> {
   await api('DELETE', `/workspaces/invites/${inviteId}`)
+}
+
+export async function leaveWorkspace(workspaceId: string): Promise<void> {
+  await api('DELETE', `/workspaces/${workspaceId}/members/me`)
 }
 
 export function buildMemberFromInvite(invite: WorkspaceInvite, userId: string, name: string): WorkspaceMember {

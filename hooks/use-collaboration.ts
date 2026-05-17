@@ -23,7 +23,11 @@ export function useMyInvites() {
     setInvites(data)
   }, [state])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    const interval = setInterval(refresh, 10000)
+    return () => clearInterval(interval)
+  }, [refresh])
 
   const accept = useCallback(
     async (inviteId: string, onAccepted: (invite: WorkspaceInvite) => Promise<void>) => {

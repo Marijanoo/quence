@@ -169,6 +169,12 @@ export class HybridAdapter implements DatabaseAdapter {
     this.invalidateWorkspace(id)
   }
 
+  // Remove a workspace from local SQLite only — used after leaving a shared workspace
+  async removeWorkspaceLocally(id: string): Promise<void> {
+    await this.sqlite.deleteWorkspace(id).catch(() => {})
+    this.invalidateWorkspace(id)
+  }
+
   // ── Collections ─────────────────────────────────────────────────────────────
   async getCollections(workspaceId?: string): Promise<Collection[]> {
     if (!workspaceId) return this.sqlite.getCollections()

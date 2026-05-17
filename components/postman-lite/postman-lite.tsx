@@ -57,7 +57,8 @@ import { WorkspaceInviteDialog } from './workspace-invite-dialog'
 import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
 import { UpdateBar } from './update-bar'
 import { useAuth } from '@/lib/auth/auth-context'
-import type { Workspace } from '@/lib/db/types'
+import type { Workspace, Environment } from '@/lib/db/types'
+import { leaveWorkspace } from '@/lib/collaboration/store'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
 
 function friendlyNetworkError(message: string): string {
@@ -124,6 +125,9 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   const [isSocketCloseConfirmOpen, setIsSocketCloseConfirmOpen] = useState(false)
   const [inviteDialogWorkspace, setInviteDialogWorkspace] = useState<Workspace | null>(null)
   const [quickInviteWorkspace, setQuickInviteWorkspace] = useState<Workspace | null>(null)
+  const [switchingToName, setSwitchingToName] = useState<string | null>(null)
+  const [conflictRequest, setConflictRequest] = useState<RequestConfig | null>(null)
+  const [deletedNotice, setDeletedNotice] = useState<{ type: 'workspace' | 'environment'; name: string } | null>(null)
 
   // Socket tab state (kept in memory only — not persisted to DB, connections are ephemeral)
   const [socketTabs, setSocketTabs] = useState<SocketTab[]>([])
@@ -169,13 +173,33 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     create: createWorkspaceRaw,
     rename: renameWorkspace,
     remove: removeWorkspace,
-    switchTo: switchWorkspace,
+    switchTo: switchWorkspaceRaw,
     update: updateWorkspace,
+    refresh: refreshWorkspaces,
   } = useWorkspaceManager()
+
+  const switchWorkspace = useCallback((id: string) => {
+    const target = workspaces.find(w => w.id === id)
+    if (target && id !== activeWorkspaceId) setSwitchingToName(target.name)
+    return switchWorkspaceRaw(id)
+  }, [switchWorkspaceRaw, workspaces, activeWorkspaceId])
 
   const createWorkspace = useCallback((name: string) => {
     return createWorkspaceRaw(name, currentUser ?? undefined)
   }, [createWorkspaceRaw, currentUser])
+
+  const handleLeaveWorkspace = useCallback(async (id: string) => {
+    await leaveWorkspace(id)
+    const db = await import('@/lib/db').then(m => m.getDatabase())
+    if ('removeWorkspaceLocally' in db) {
+      await (db as any).removeWorkspaceLocally(id)
+    }
+    const remaining = await refreshWorkspaces()
+    if (id === activeWorkspaceId && remaining?.length) {
+      const next = remaining.find(w => w.id !== id)
+      if (next) switchWorkspaceRaw(next.id)
+    }
+  }, [refreshWorkspaces, activeWorkspaceId, switchWorkspaceRaw])
 
   // Permission: owner always has write; members need read-write; no workspace = write (local)
   const isOwner = !activeWorkspace
@@ -187,12 +211,33 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Data hooks — all scoped to the active workspace
   const safeWorkspaceId = workspaceManagerLoading ? null : activeWorkspaceId
-  const { collections, create: createCollection, update: updateCollection, remove: removeCollection, importCollection, reorder: reorderCollections } = useCollections(safeWorkspaceId)
-  const { requests, create: createRequest, update: updateRequest, remove: removeRequest, refresh: refreshRequests, importRequests, reorderRequests } = useRequests()
+  const { collections, create: createCollection, update: updateCollection, remove: removeCollection, importCollection, reorder: reorderCollections, refresh: refreshCollections } = useCollections(safeWorkspaceId)
+  const { requests, create: createRequest, update: updateRequest, remove: removeRequest, refresh: refreshRequests, importRequests, reorderRequests, get: getRequest } = useRequests()
   const { socketConfigs, create: createSocketConfig, update: dbUpdateSocketConfig, remove: removeSocketConfig, importSocketConfigs, refresh: refreshSocketConfigs } = useSocketConfigs()
   const { sequences, create: createSequence, update: updateSequence, remove: removeSequence } = useSequences(safeWorkspaceId)
   const { history, add: addToHistory, remove: removeHistoryEntry, clear: clearHistory } = useHistory(safeWorkspaceId)
-  const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment } = useEnvironments(safeWorkspaceId)
+  const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment, refresh: refreshEnvironments } = useEnvironments(safeWorkspaceId)
+
+  // Called after a workspace refresh — handles active workspace being deleted/removed
+  const checkWorkspaceStillExists = useCallback((refreshed: Workspace[]) => {
+    if (!activeWorkspaceId) return
+    const current = workspaces.find(w => w.id === activeWorkspaceId)
+    if (!refreshed.some(w => w.id === activeWorkspaceId)) {
+      const next = refreshed[0]
+      if (next) switchWorkspaceRaw(next.id)
+      setDeletedNotice({ type: 'workspace', name: current?.name ?? 'Unknown' })
+    }
+  }, [activeWorkspaceId, workspaces, switchWorkspaceRaw])
+
+  // Called after an environment refresh — handles active environment being deleted
+  const checkActiveEnvironmentStillExists = useCallback((refreshedEnvs: Environment[]) => {
+    if (!activeEnvironment) return
+    if (!refreshedEnvs.some(e => e.id === activeEnvironment.id)) {
+      setActiveEnvironment(null)
+      setDeletedNotice({ type: 'environment', name: activeEnvironment.name })
+    }
+  }, [activeEnvironment, setActiveEnvironment])
+
   const {
     tabs,
     activeTab,
@@ -249,6 +294,10 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceLoading, activeWorkspaceId])
 
+  useEffect(() => {
+    if (!workspaceLoading) setSwitchingToName(null)
+  }, [workspaceLoading])
+
   // Persist socket tabs and tab order whenever they change — but only after initial restore is done
   useEffect(() => {
     if (!socketRestoredRef.current) return
@@ -270,8 +319,34 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     })
   }, [tabs])
 
+  // Live polling for cloud workspaces
+  const isCloudWorkspace = (activeWorkspace?.members?.length ?? 0) > 0
+  const checkWorkspaceStillExistsRef = useRef(checkWorkspaceStillExists)
+  const checkActiveEnvironmentStillExistsRef = useRef(checkActiveEnvironmentStillExists)
+  useEffect(() => { checkWorkspaceStillExistsRef.current = checkWorkspaceStillExists }, [checkWorkspaceStillExists])
+  useEffect(() => { checkActiveEnvironmentStillExistsRef.current = checkActiveEnvironmentStillExists }, [checkActiveEnvironmentStillExists])
+
+  useEffect(() => {
+    if (!isCloudWorkspace || workspaceLoading) return
+
+    const poll = async () => {
+      if (document.visibilityState === 'hidden') return
+      const [refreshedWorkspaces, refreshedEnvs] = await Promise.all([
+        refreshWorkspaces(),
+        refreshEnvironments(),
+        refreshCollections(),
+        refreshRequests(),
+      ] as const)
+      if (refreshedWorkspaces) checkWorkspaceStillExistsRef.current(refreshedWorkspaces)
+      if (refreshedEnvs) checkActiveEnvironmentStillExistsRef.current(refreshedEnvs)
+    }
+
+    const id = setInterval(poll, 8000)
+    return () => clearInterval(id)
+  }, [isCloudWorkspace, workspaceLoading, activeWorkspaceId])
+
   // Execute request
-  const executeRequest = useCallback(async () => {
+  const executeRequest = useCallback(async (urlOverride?: string) => {
     if (!activeTab || activeTab.isHistorical) return
 
     // Cancel any in-flight request before starting a new one
@@ -287,7 +362,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     abortControllerRef.current = controller
 
     try {
-      const request = activeTab.request
+      const request = { ...activeTab.request, ...(urlOverride !== undefined ? { url: urlOverride } : {}) }
       const envVariables = activeEnvironment?.variables || []
 
       // Parse variables in URL
@@ -507,7 +582,38 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     return res.json()
   }, [activeEnvironment])
 
+  // Walks the full sequence tree and returns a list of missing request descriptions
+  const collectMissingRequests = useCallback((
+    seq: Sequence,
+    visited = new Set<string>(),
+    path = seq.name,
+  ): { stepName: string; path: string }[] => {
+    if (visited.has(seq.id)) return []
+    visited.add(seq.id)
+    const missing: { stepName: string; path: string }[] = []
+    for (const step of seq.steps) {
+      if (step.type === 'request') {
+        if (!requests.find(r => r.id === step.requestId)) {
+          missing.push({ stepName: step.name, path })
+        }
+      } else if (step.type === 'sequence' && step.sequenceId) {
+        const sub = sequences.find(s => s.id === step.sequenceId)
+        if (sub) {
+          missing.push(...collectMissingRequests(sub, visited, `${path} → ${sub.name}`))
+        }
+      }
+    }
+    return missing
+  }, [requests, sequences])
+
+  const [sequenceMissingRequests, setSequenceMissingRequests] = useState<{ stepName: string; path: string }[]>([])
+
   const executeSequence = useCallback(async (seq: Sequence) => {
+    const missing = collectMissingRequests(seq)
+    if (missing.length > 0) {
+      setSequenceMissingRequests(missing)
+      return
+    }
     setRunningSequenceId(seq.id)
     sequenceAbortRef.current = false
     const controller = new AbortController()
@@ -948,7 +1054,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       }
     } else {
       setActiveSocketTabId(null)
-      await createTab({ ...request }, request.id)
+      await createTab({ ...request }, request.id, { serverUpdatedAt: request.updatedAt })
     }
     setActiveView('requests')
   }, [tabs, activeTabId, activeSocketTabId, flashTab, createTab, setActiveTab])
@@ -986,7 +1092,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     await createRequest(request)
     // Single atomic update: set requestId, savedRequest, and request in one call
     // so openRequest() always finds the tab by requestId without a race condition
-    await updateTab(tabToSave.id, { requestId: request.id, request, savedRequest: request, isDirty: false })
+    await updateTab(tabToSave.id, { requestId: request.id, request, savedRequest: request, isDirty: false, serverUpdatedAt: request.updatedAt })
     await refreshRequests()
 
     setSaveRequestName('')
@@ -1010,17 +1116,26 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   const openSaveDialog = useCallback(async () => {
     if (!activeTab) return
     if (activeTab.requestId) {
+      // Conflict check for cloud workspaces
+      const isCloud = (activeWorkspace?.members?.length ?? 0) > 0
+      if (isCloud && activeTab.serverUpdatedAt !== undefined) {
+        const serverRequest = await getRequest(activeTab.requestId)
+        if (serverRequest && serverRequest.updatedAt !== activeTab.serverUpdatedAt) {
+          setConflictRequest(serverRequest)
+          return
+        }
+      }
       const updated = { ...activeTab.request, name: activeTab.request.name || 'New Request', updatedAt: Date.now() }
       await updateRequest(activeTab.requestId, updated)
       await markTabSaved(activeTab.id, activeTab.requestId)
-      await updateTab(activeTab.id, { request: updated, isDirty: false })
+      await updateTab(activeTab.id, { request: updated, savedRequest: updated, isDirty: false, serverUpdatedAt: updated.updatedAt })
       await refreshRequests()
       return
     }
     setSaveRequestName(activeTab.request.name || 'New Request')
     setSaveCollectionId(collections[0]?.id || '')
     setIsSaveDialogOpen(true)
-  }, [activeTab, collections, updateRequest, markTabSaved, updateTab, refreshRequests])
+  }, [activeTab, activeWorkspace, collections, getRequest, updateRequest, markTabSaved, updateTab, refreshRequests])
 
   const saveCurrentSocket = useCallback(async () => {
     const tab = socketTabs.find(t => t.id === activeSocketTabId)
@@ -1324,12 +1439,14 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     }
   }, [])
 
-  if (workspaceManagerLoading || workspaceLoading) {
+  const isLoadingWorkspace = workspaceManagerLoading || workspaceLoading
+
+  if (isLoadingWorkspace && !switchingToName) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading workspace...</p>
+          <p className="text-sm text-muted-foreground">Loading workspace…</p>
         </div>
       </div>
     )
@@ -1341,6 +1458,16 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       onUpdateEnvironment={updateEnvironment}
     >
       <div className="h-screen flex flex-col bg-background">
+        {/* Workspace switch overlay — fades in/out */}
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background gap-4 transition-opacity duration-300 pointer-events-none"
+          style={{ opacity: isLoadingWorkspace ? 1 : 0 }}
+        >
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">
+            {switchingToName ? `Switching to ${switchingToName}…` : 'Loading workspace…'}
+          </p>
+        </div>
         <TitleBar
           workspaceDropdown={
             <WorkspaceDropdown
@@ -1356,6 +1483,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               onImportAll={() => allDataImportRef.current?.click()}
               onUpdateWorkspace={updateWorkspace}
               getWorkspace={(id) => workspaces.find(w => w.id === id)}
+              onLeave={handleLeaveWorkspace}
             />
           }
           environments={
@@ -1371,6 +1499,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           onOpenHelp={() => setIsHelpOpen(true)}
           onSave={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
           canSave={canWrite && (!!activeTab || !!activeSocketTab)}
+          onInviteAccepted={(wsId) => switchWorkspace(wsId)}
+          onRefreshWorkspaces={refreshWorkspaces}
         />
         <input
           ref={workspaceImportRef}
@@ -1433,9 +1563,6 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
             onDeleteEnvironment={canWrite ? removeEnvironment : () => {}}
             onUpdateEnvironment={canWrite ? updateEnvironment : () => {}}
             onSetActiveEnvironment={setActiveEnvironment}
-            onInviteAccepted={(ws) => switchWorkspace(ws.id)}
-            onUpdateWorkspace={updateWorkspace}
-            getWorkspace={(id) => workspaces.find(w => w.id === id)}
           />
         </ResizablePanel>
 
@@ -1967,6 +2094,93 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               }}
             >
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sequence missing requests dialog */}
+      <Dialog open={sequenceMissingRequests.length > 0} onOpenChange={(o) => { if (!o) setSequenceMissingRequests([]) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Sequence has deleted requests</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-3">
+            The following steps reference requests that no longer exist. Remove or replace them before running.
+          </p>
+          <div className="space-y-1.5 max-h-60 overflow-y-auto">
+            {sequenceMissingRequests.map((m, i) => (
+              <div key={i} className="rounded-md bg-destructive/10 px-3 py-2">
+                <p className="text-sm font-medium text-destructive">{m.stepName}</p>
+                <p className="text-xs text-muted-foreground">{m.path}</p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setSequenceMissingRequests([])}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Deleted workspace / environment notice */}
+      <Dialog open={!!deletedNotice} onOpenChange={(o) => { if (!o) setDeletedNotice(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {deletedNotice?.type === 'workspace' ? 'Workspace deleted' : 'Environment deleted'}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {deletedNotice?.type === 'workspace'
+              ? `The workspace "${deletedNotice.name}" was deleted or you were removed from it. You've been switched to another workspace.`
+              : `The environment "${deletedNotice?.name}" was deleted and has been deactivated.`}
+          </p>
+          <DialogFooter>
+            <Button onClick={() => setDeletedNotice(null)}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save conflict dialog */}
+      <Dialog open={!!conflictRequest} onOpenChange={(o) => { if (!o) setConflictRequest(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save conflict</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Someone else saved this request after you opened it. Do you want to overwrite their changes with yours, or discard yours and reload theirs?
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConflictRequest(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (!activeTab || !conflictRequest) return
+                await updateTab(activeTab.id, {
+                  request: conflictRequest,
+                  savedRequest: conflictRequest,
+                  isDirty: false,
+                  serverUpdatedAt: conflictRequest.updatedAt,
+                })
+                await refreshRequests()
+                setConflictRequest(null)
+              }}
+            >
+              Discard mine
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!activeTab || !conflictRequest) return
+                const updated = { ...activeTab.request, updatedAt: Date.now() }
+                await updateRequest(activeTab.requestId!, updated)
+                await updateTab(activeTab.id, { request: updated, savedRequest: updated, isDirty: false, serverUpdatedAt: updated.updatedAt })
+                await refreshRequests()
+                setConflictRequest(null)
+              }}
+            >
+              Overwrite theirs
             </Button>
           </DialogFooter>
         </DialogContent>
