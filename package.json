@@ -1,6 +1,6 @@
 {
   "name": "quence",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node server.mjs",

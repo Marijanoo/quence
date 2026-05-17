@@ -1,5 +1,6 @@
 'use client'
 
+import { version } from '@/package.json'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { RequestConfig, ResponseData, HistoryEntry, Collection, SocketConfig, SocketTab, SocketMessage, SocketMessageType, SocketProtocol, Sequence, SequenceStepResult } from '@/lib/db/types'
 import { createNewRequest, createNewSocketConfig } from '@/lib/db/types'
@@ -1721,7 +1722,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
             <Settings2 className="h-3.5 w-3.5" />
             <span>Appearance</span>
           </button>
-          <span className="text-xs text-muted-foreground/40 select-none">v0.1.1</span>
+          <span className="text-xs text-muted-foreground/40 select-none">v{version}</span>
         </div>
 
         {updateProgress !== null && (
