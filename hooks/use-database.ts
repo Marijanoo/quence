@@ -518,7 +518,11 @@ export function useWorkspace(workspaceId?: string | null) {
   const saveState = useCallback(async (newState: WorkspaceState) => {
     if (!db || !workspaceId) return
     setState(newState)
-    await db.saveWorkspaceState(workspaceId, newState)
+    const persistState = {
+      ...newState,
+      tabs: newState.tabs.map(t => ({ ...t, response: null })),
+    }
+    await db.saveWorkspaceState(workspaceId, persistState)
   }, [db, workspaceId])
 
   const activeTab = state.tabs.find(t => t.id === state.activeTabId)
