@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type { WorkspaceTab, SocketTab, HttpMethod, SocketProtocol } from '@/lib/db/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,7 @@ interface TabBarProps {
   socketTabs: SocketTab[]
   tabOrder: TabOrderEntry[]
   activeTabId: string | null
+  flashTabId: string | null
   onSelectTab: (id: string) => void
   onCloseTab: (id: string) => void
   onNewTab: () => void
@@ -59,6 +60,7 @@ export function TabBar({
   socketTabs,
   tabOrder,
   activeTabId,
+  flashTabId,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -68,6 +70,14 @@ export function TabBar({
 }: TabBarProps) {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
+  const [flashingId, setFlashingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!flashTabId) return
+    setFlashingId(flashTabId)
+    const t = setTimeout(() => setFlashingId(null), 600)
+    return () => clearTimeout(t)
+  }, [flashTabId])
 
   const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
     setDragTabId(id)
@@ -123,6 +133,7 @@ export function TabBar({
               if (!tab) return null
               const tabName = tab.request.name || 'Untitled'
               const method = tab.request.method
+              const isFlashing = flashingId === tab.id
               return (
                 <div
                   key={tab.id}
@@ -136,6 +147,7 @@ export function TabBar({
                     isActive ? 'bg-background border-b-2 border-b-primary -mb-px' : 'bg-card hover:bg-secondary/50',
                     isDragging && 'opacity-40',
                     isDragOver && 'border-l-2 border-l-primary',
+                    isFlashing && 'tab-flash',
                   )}
                   onClick={() => onSelectTab(tab.id)}
                   onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onCloseTab(tab.id) } }}
@@ -159,6 +171,7 @@ export function TabBar({
               if (!tab) return null
               const tabName = tab.config.name || 'New Socket'
               const protocol = tab.config.protocol ?? 'ws'
+              const isFlashing = flashingId === tab.id
               return (
                 <div
                   key={tab.id}
@@ -172,6 +185,7 @@ export function TabBar({
                     isActive ? 'bg-background border-b-2 border-b-primary -mb-px' : 'bg-card hover:bg-secondary/50',
                     isDragging && 'opacity-40',
                     isDragOver && 'border-l-2 border-l-primary',
+                    isFlashing && 'tab-flash',
                   )}
                   onClick={() => onSelectTab(tab.id)}
                   onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onCloseTab(tab.id) } }}

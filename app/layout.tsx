@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { AuthProvider } from '@/lib/auth/auth-context'
 import { ZoomHandler } from '@/components/zoom-handler'
+import { Toaster } from '@/components/ui/sonner'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -24,6 +25,7 @@ export default function RootLayout({
         <AuthProvider>
           <ZoomHandler />
           {children}
+          <Toaster position="bottom-right" />
         </AuthProvider>
       </body>
     </html>

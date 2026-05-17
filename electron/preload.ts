@@ -9,6 +9,10 @@ async function invoke(channel: string, ...args: any[]) {
 contextBridge.exposeInMainWorld('electronAPI', {
   makeRequest: (options: any) => ipcRenderer.invoke('make-request', options),
   cancelRequest: (requestId: string) => ipcRenderer.send('cancel-request', { requestId }),
+  onUpdateAvailable: (cb: () => void) => ipcRenderer.on('update-available', cb),
+  onUpdateProgress: (cb: (percent: number) => void) => ipcRenderer.on('update-progress', (_e, percent) => cb(percent)),
+  onUpdateDownloaded: (cb: () => void) => ipcRenderer.on('update-downloaded', cb),
+  installUpdate: () => ipcRenderer.send('install-update'),
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
@@ -38,7 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   db: {
     auth: {
       login:      (email: string, password: string) => invoke('db:auth:login', email, password),
-      register:   (id: string, email: string, name: string, password: string) => invoke('db:auth:register', id, email, name, password),
+      register:   (email: string, name: string, password: string) => invoke('db:auth:register', email, name, password),
       userExists: (id: string) => invoke('db:auth:userExists', id),
     },
     workspaces: {

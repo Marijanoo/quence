@@ -1,7 +1,26 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, Users, Mail, X } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+} from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, Mail, X, MoreHorizontal } from 'lucide-react'
 import type { Workspace, WorkspaceInvite, WorkspaceMember } from '@/lib/db/types'
 import { useAuth } from '@/lib/auth/auth-context'
 import { useMyInvites, buildMemberFromInvite } from '@/hooks/use-collaboration'
@@ -17,9 +36,74 @@ interface Props {
   onImport: () => void
   onExportAll: () => void
   onImportAll: () => void
-  onManageAccess: (workspace: Workspace) => void
   onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
   getWorkspace: (id: string) => Workspace | undefined
+}
+
+function getInitials(name: string) {
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+}
+
+function WorkspaceAvatar({ name }: { name: string }) {
+  return (
+    <span className="shrink-0 w-7 h-7 rounded-full bg-primary flex items-center justify-center text-[10px] font-semibold text-primary-foreground select-none">
+      {getInitials(name)}
+    </span>
+  )
+}
+
+// Per-row context/actions menu
+function WorkspaceActions({
+  ws,
+  owned,
+  canDelete,
+  onRename,
+  onDelete,
+  onExport,
+}: {
+  ws: Workspace
+  owned: boolean
+  canDelete: boolean
+  onRename: () => void
+  onDelete: () => void
+  onExport: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <span
+          className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          onClick={e => e.stopPropagation()}
+          title="Actions"
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40" onClick={e => e.stopPropagation()}>
+        <DropdownMenuItem onSelect={onExport}>
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </DropdownMenuItem>
+        {owned && (
+          <>
+            <DropdownMenuItem onSelect={onRename}>
+              <Pencil className="h-3.5 w-3.5" />
+              Rename
+            </DropdownMenuItem>
+            {canDelete && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 export function WorkspaceDropdown({
@@ -33,7 +117,6 @@ export function WorkspaceDropdown({
   onImport,
   onExportAll,
   onImportAll,
-  onManageAccess,
   onUpdateWorkspace,
   getWorkspace,
 }: Props) {
@@ -43,10 +126,38 @@ export function WorkspaceDropdown({
 
   const { invites, accept, decline } = useMyInvites()
 
+  const [open, setOpen] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [contextWs, setContextWs] = useState<Workspace | null>(null)
+  const [contextPos, setContextPos] = useState({ x: 0, y: 0 })
+  const newInputRef = useRef<HTMLInputElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { if (isCreating) newInputRef.current?.focus() }, [isCreating])
+  useEffect(() => { if (renamingId) renameInputRef.current?.focus() }, [renamingId])
+
+  function isOwner(ws: Workspace) {
+    return !currentUserId || ws.ownerId === currentUserId || ws.ownerId === 'local'
+  }
+
+  const submitCreate = useCallback(() => {
+    const name = newName.trim()
+    if (name) onCreate(name)
+    setNewName('')
+    setIsCreating(false)
+  }, [newName, onCreate])
+
+  const submitRename = useCallback((id: string) => {
+    const name = renameValue.trim()
+    if (name) { onRename(id, name); setRenamingId(null) }
+  }, [renameValue, onRename])
+
   async function handleAccept(invite: WorkspaceInvite) {
     if (!currentUser) return
     await accept(invite.id, async (accepted) => {
-      // Fetch the workspace directly from DB — invitee won't have it in local state yet
       const workspace = await window.electronAPI!.db.workspaces.getOne(accepted.workspaceId)
       if (!workspace) return
       const newMember: WorkspaceMember = buildMemberFromInvite(accepted, currentUser.id, currentUser.name)
@@ -57,273 +168,230 @@ export function WorkspaceDropdown({
     })
   }
 
-  const [open, setOpen] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [isCreating, setIsCreating] = useState(false)
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const newInputRef = useRef<HTMLInputElement>(null)
-  const renameInputRef = useRef<HTMLInputElement>(null)
+  const [contextOpen, setContextOpen] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-        setIsCreating(false)
-        setRenamingId(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [open])
-
-  useEffect(() => {
-    if (isCreating) newInputRef.current?.focus()
-  }, [isCreating])
-
-  useEffect(() => {
-    if (renamingId) renameInputRef.current?.focus()
-  }, [renamingId])
-
-  const submitCreate = useCallback(() => {
-    const name = newName.trim()
-    if (name) {
-      onCreate(name)
-      setNewName('')
-    }
-    setIsCreating(false)
-  }, [newName, onCreate])
-
-  const submitRename = useCallback((id: string) => {
-    const name = renameValue.trim()
-    if (name) onRename(id, name)
-    setRenamingId(null)
-  }, [renameValue, onRename])
-
-  const startRename = useCallback((ws: Workspace, e: React.MouseEvent) => {
+  function handleContextMenu(e: React.MouseEvent, ws: Workspace) {
+    e.preventDefault()
     e.stopPropagation()
-    setRenamingId(ws.id)
-    setRenameValue(ws.name)
-  }, [])
-
-  const handleDelete = useCallback((ws: Workspace, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (workspaces.length <= 1) return
-    onDelete(ws.id)
-  }, [workspaces.length, onDelete])
-
-  function isOwner(ws: Workspace) {
-    return !currentUserId || ws.ownerId === currentUserId || ws.ownerId === 'local'
+    setContextOpen(false)
+    setContextPos({ x: e.clientX, y: e.clientY })
+    setContextWs(ws)
+    // defer open so position and ws are set first
+    requestAnimationFrame(() => setContextOpen(true))
   }
 
   return (
-    <div ref={containerRef} className="relative">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-      >
-        <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-        <span className="text-xs font-medium max-w-32 truncate">
-          {activeWorkspace?.name ?? 'Workspaces'}
-        </span>
-        <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute left-0 top-full mt-1 w-72 bg-popover border border-border rounded-lg shadow-xl z-50 overflow-hidden">
-          <div className="px-3 py-2 border-b border-border">
-            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Workspaces
+    <>
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <DropdownMenuTrigger asChild>
+          <button className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+            <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+            <span className="text-xs font-medium max-w-32 truncate">
+              {activeWorkspace?.name ?? 'Workspaces'}
             </span>
-          </div>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </button>
+        </DropdownMenuTrigger>
 
-          <div className="max-h-72 overflow-y-auto py-1">
-            {workspaces.map(ws => {
-              const owned = isOwner(ws)
-              return (
-                <div
-                  key={ws.id}
-                  className={`group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-accent/20 transition-colors ${
-                    ws.id === activeWorkspace?.id ? 'bg-accent/10' : ''
-                  }`}
-                  onClick={() => {
-                    if (renamingId === ws.id) return
-                    onSelect(ws.id)
-                    setOpen(false)
-                  }}
-                >
-                  {/* Active checkmark */}
-                  <span className="w-4 shrink-0">
-                    {ws.id === activeWorkspace?.id && (
-                      <Check className="h-3.5 w-3.5 text-primary" />
-                    )}
-                  </span>
+        <DropdownMenuContent align="start" className="w-72">
 
-                  {/* Name + owner */}
-                  <div className="flex-1 min-w-0">
-                    {renamingId === ws.id ? (
-                      <input
-                        ref={renameInputRef}
-                        value={renameValue}
-                        onChange={e => setRenameValue(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') submitRename(ws.id)
-                          if (e.key === 'Escape') setRenamingId(null)
-                        }}
-                        onBlur={() => submitRename(ws.id)}
-                        onClick={e => e.stopPropagation()}
-                        className="w-full bg-input border border-border rounded px-1.5 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-                      />
-                    ) : (
-                      <>
-                        <span className="block text-sm text-foreground truncate">{ws.name}</span>
-                        <span className="block text-xs text-muted-foreground truncate">
-                          {owned ? 'You' : ws.ownerName}
-                        </span>
-                      </>
-                    )}
-                  </div>
+          {/* Workspace list */}
+          {workspaces.map(ws => {
+            const owned = isOwner(ws)
+            const isCloud = (ws.members?.length ?? 0) > 0
+            return (
+              <DropdownMenuItem
+                key={ws.id}
+                onSelect={() => onSelect(ws.id)}
+                className="flex items-center gap-2 group pr-1"
+                onContextMenu={e => handleContextMenu(e, ws)}
+              >
+                {/* Active check */}
+                <span className="w-3.5 shrink-0">
+                  {ws.id === activeWorkspace?.id && <Check className="h-3.5 w-3.5 text-primary" />}
+                </span>
 
-                  {/* Actions */}
-                  {renamingId !== ws.id && (
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      {owned && (
-                        <button
-                          onClick={e => { e.stopPropagation(); onManageAccess(ws) }}
-                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                          title="Manage access"
-                        >
-                          <Users className="h-3 w-3" />
-                        </button>
-                      )}
-                      <button
-                        onClick={e => { e.stopPropagation(); onExport(ws.id) }}
-                        className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                        title="Export workspace"
-                      >
-                        <Download className="h-3 w-3" />
-                      </button>
-                      {owned && (
-                        <>
-                          <button
-                            onClick={e => startRename(ws, e)}
-                            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                            title="Rename"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={e => handleDelete(ws, e)}
-                            disabled={workspaces.length <= 1}
-                            className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                            title={workspaces.length <= 1 ? "Can't delete the only workspace" : 'Delete workspace'}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
+                {/* Name + owner */}
+                <div className="flex-1 min-w-0">
+                  <span className="block truncate text-sm">{ws.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{owned ? 'Your workspace' : ws.ownerName}</span>
                 </div>
-              )
-            })}
-          </div>
 
-          {/* Pending invites */}
-          <div className="border-t border-border">
-            <div className="px-3 py-2">
-              <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Invites</span>
-            </div>
-            {invites.length === 0 ? (
-              <p className="px-3 pb-2 text-xs text-muted-foreground">No invites</p>
-            ) : (
-              <div className="pb-1">
-                {invites.map(invite => (
-                  <div key={invite.id} className="flex items-center gap-2 px-3 py-2 hover:bg-accent/10">
-                    <Mail className="h-3.5 w-3.5 text-primary shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="block text-sm text-foreground truncate">{invite.workspaceName}</span>
-                      <span className="block text-xs text-muted-foreground truncate">
-                        {invite.permission === 'read' ? 'Read only' : 'Read & write'} · from {invite.ownerName}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-0.5 shrink-0">
+                {/* Cloud/Local badge */}
+                <span className={`shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded uppercase ${
+                  isCloud ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
+                }`}>
+                  {isCloud ? 'Cloud' : 'Local'}
+                </span>
+
+                {/* Actions ... */}
+                <WorkspaceActions
+                  ws={ws}
+                  owned={owned}
+                  canDelete={workspaces.length > 1}
+                  onRename={() => { setRenamingId(ws.id); setRenameValue(ws.name); setOpen(false) }}
+                  onDelete={() => { onDelete(ws.id); setOpen(false) }}
+                  onExport={() => { onExport(ws.id); setOpen(false) }}
+                />
+              </DropdownMenuItem>
+            )
+          })}
+
+          <DropdownMenuSeparator />
+
+          {/* Invites submenu */}
+          {invites.length > 0 && (
+            <>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Mail className="h-3.5 w-3.5" />
+                  Invites ({invites.length})
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-56">
+                  {invites.map(invite => (
+                    <div key={invite.id} className="flex items-center gap-2 px-2 py-1.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{invite.workspaceName}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {invite.permission === 'read' ? 'Read only' : 'Read & write'} · from {invite.ownerName}
+                        </p>
+                      </div>
                       <button
                         onClick={() => decline(invite.id)}
-                        className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                        className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors shrink-0"
                         title="Decline"
                       >
                         <X className="h-3 w-3" />
                       </button>
                       <button
                         onClick={() => handleAccept(invite)}
-                        className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors"
+                        className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors shrink-0"
                         title="Accept"
                       >
                         <Check className="h-3 w-3" />
                       </button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
+            </>
+          )}
 
-          <div className="border-t border-border py-1">
-            {isCreating ? (
-              <div className="flex items-center gap-2 px-3 py-2">
-                <Plus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <input
-                  ref={newInputRef}
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') submitCreate()
-                    if (e.key === 'Escape') { setIsCreating(false); setNewName('') }
-                  }}
-                  onBlur={submitCreate}
-                  placeholder="Workspace name…"
-                  className="flex-1 bg-input border border-border rounded px-1.5 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
-                />
-              </div>
-            ) : (
-              <>
-                <button
-                  onClick={() => setIsCreating(true)}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  New Workspace
-                </button>
-                <button
-                  onClick={() => { setOpen(false); onImport() }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import Workspace
-                </button>
-                <div className="mx-3 my-1 border-t border-border" />
-                <button
-                  onClick={() => { setOpen(false); onExportAll() }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Export All Data
-                </button>
-                <button
-                  onClick={() => { setOpen(false); onImportAll() }}
-                  className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import All Data
-                </button>
-              </>
-            )}
+          {/* New workspace */}
+          <DropdownMenuItem onSelect={() => { setIsCreating(true); setOpen(false) }}>
+            <Plus className="h-3.5 w-3.5" />
+            New Workspace
+          </DropdownMenuItem>
+
+          {/* Import/Export */}
+          <div className="flex px-1 py-0.5 gap-1">
+            <DropdownMenuItem className="flex-1" onSelect={() => { onExport(activeWorkspace?.id ?? ''); setOpen(false) }}>
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </DropdownMenuItem>
+            <DropdownMenuItem className="flex-1" onSelect={() => { onImport(); setOpen(false) }}>
+              <Upload className="h-3.5 w-3.5" />
+              Import
+            </DropdownMenuItem>
           </div>
-        </div>
-      )}
-    </div>
+          <DropdownMenuSeparator />
+          <div className="flex px-1 py-0.5 gap-1">
+            <DropdownMenuItem className="flex-1" onSelect={() => { onExportAll(); setOpen(false) }}>
+              <Download className="h-3.5 w-3.5" />
+              Export All
+            </DropdownMenuItem>
+            <DropdownMenuItem className="flex-1" onSelect={() => { onImportAll(); setOpen(false) }}>
+              <Upload className="h-3.5 w-3.5" />
+              Import All
+            </DropdownMenuItem>
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Right-click context menu - always rendered to prevent remount on second right-click */}
+      <DropdownMenu open={contextOpen} onOpenChange={o => { if (!o) { setContextOpen(false); setContextWs(null) } }}>
+        <DropdownMenuTrigger asChild>
+          <span className="fixed" style={{ left: contextPos.x, top: contextPos.y, width: 0, height: 0, display: 'block' }} />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-40">
+          {contextWs && (
+            <>
+              <DropdownMenuItem onSelect={() => { onSelect(contextWs.id); setContextOpen(false); setContextWs(null) }}>
+                <Check className="h-3.5 w-3.5" />
+                Switch
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => { onExport(contextWs.id); setContextOpen(false); setContextWs(null) }}>
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </DropdownMenuItem>
+              {isOwner(contextWs) && (
+                <>
+                  <DropdownMenuItem onSelect={() => { setRenamingId(contextWs.id); setRenameValue(contextWs.name); setContextOpen(false); setContextWs(null) }}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    Rename
+                  </DropdownMenuItem>
+                  {workspaces.length > 1 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => { onDelete(contextWs.id); setContextOpen(false); setContextWs(null) }} className="text-destructive focus:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Rename dialog */}
+      <Dialog open={!!renamingId} onOpenChange={o => { if (!o) setRenamingId(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename Workspace</DialogTitle>
+          </DialogHeader>
+          <Input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') submitRename(renamingId!)
+              if (e.key === 'Escape') setRenamingId(null)
+            }}
+            placeholder="Workspace name…"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenamingId(null)}>Cancel</Button>
+            <Button onClick={() => submitRename(renamingId!)} disabled={!renameValue.trim()}>Rename</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New workspace dialog */}
+      <Dialog open={isCreating} onOpenChange={o => { if (!o) { setIsCreating(false); setNewName('') } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New Workspace</DialogTitle>
+          </DialogHeader>
+          <Input
+            ref={newInputRef}
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') submitCreate()
+              if (e.key === 'Escape') { setIsCreating(false); setNewName('') }
+            }}
+            placeholder="Workspace name…"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setIsCreating(false); setNewName('') }}>Cancel</Button>
+            <Button onClick={submitCreate} disabled={!newName.trim()}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

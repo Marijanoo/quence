@@ -5,6 +5,10 @@ declare global {
     electronAPI?: {
       makeRequest: (options: any) => Promise<any>
       cancelRequest: (requestId: string) => void
+      onUpdateAvailable?: (cb: () => void) => void
+      onUpdateProgress?: (cb: (percent: number) => void) => void
+      onUpdateDownloaded: (cb: () => void) => void
+      installUpdate?: () => void
       minimize: () => void
       maximize: () => void
       close: () => void
@@ -19,7 +23,7 @@ declare global {
       db: {
         auth: {
           login: (email: string, password: string) => Promise<{ id: string; email: string; name: string }>
-          register: (id: string, email: string, name: string, password: string) => Promise<{ id: string; email: string; name: string }>
+          register: (email: string, name: string, password: string) => Promise<{ id: string; email: string; name: string }>
           userExists: (id: string) => Promise<boolean>
         }
         workspaces: {
