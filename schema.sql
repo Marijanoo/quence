@@ -1,8 +1,10 @@
 -- Postman Lite schema
 -- Run against the postlite database: psql -U postgres -d postlite -f schema.sql
 
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
 CREATE TABLE IF NOT EXISTS users (
-  id          TEXT PRIMARY KEY,
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email       TEXT UNIQUE NOT NULL,
   name        TEXT NOT NULL,
   password    TEXT NOT NULL,
@@ -12,7 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS workspaces (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
-  owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   owner_name  TEXT NOT NULL,
   owner_email TEXT NOT NULL,
   members     JSONB NOT NULL DEFAULT '[]',
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS socket_configs (
 CREATE TABLE IF NOT EXISTS sequences (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
+  workspace_id  TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
   collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
   steps         JSONB NOT NULL DEFAULT '[]',
   created_at    BIGINT NOT NULL,

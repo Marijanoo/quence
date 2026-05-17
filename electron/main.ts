@@ -3,6 +3,7 @@ import * as path from 'path'
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
+import { autoUpdater } from 'electron-updater'
 import {
   dbLogin, dbRegister, dbUserExists,
   dbGetWorkspace, dbGetWorkspaces, dbCreateWorkspace, dbUpdateWorkspace, dbDeleteWorkspace,
@@ -217,7 +218,7 @@ app.on('ready', () => {
     })
 
   handle('db:auth:login',       (email, password) => dbLogin(email, password))
-  handle('db:auth:register',    (id, email, name, password) => dbRegister(id, email, name, password))
+  handle('db:auth:register',    (email, name, password) => dbRegister(email, name, password))
   handle('db:auth:userExists',  (id) => dbUserExists(id))
 
   handle('db:workspaces:get',    (userId) => dbGetWorkspaces(userId))
@@ -402,6 +403,27 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
+
+// Auto-updater — only runs in production builds
+if (isProd) {
+  autoUpdater.checkForUpdatesAndNotify()
+
+  autoUpdater.on('update-available', () => {
+    mainWindow?.webContents.send('update-available')
+  })
+
+  autoUpdater.on('download-progress', (info) => {
+    mainWindow?.webContents.send('update-progress', info.percent)
+  })
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow?.webContents.send('update-downloaded')
+  })
+
+  ipcMain.on('install-update', () => {
+    autoUpdater.quitAndInstall()
+  })
+}
 
 app.on('activate', () => {
   if (mainWindow === null) {

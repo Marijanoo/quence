@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
-import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save } from 'lucide-react'
+import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save, Trash2, Eye, Shield, Loader2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,17 +10,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useAuth } from '@/lib/auth/auth-context'
 import { cn } from '@/lib/utils'
-import { useMyInvites } from '@/hooks/use-collaboration'
+import { useMyInvites, useWorkspaceMembers } from '@/hooks/use-collaboration'
+import type { Workspace, WorkspacePermission } from '@/lib/db/types'
 
 interface TitleBarProps {
   workspaceDropdown?: React.ReactNode
   environments?: React.ReactNode
-  activeWorkspace?: { members?: any[] } | null
+  activeWorkspace?: Workspace | null
   isOwner?: boolean
-  onOpenMembers?: () => void
-  onOpenInvite?: () => void
+  onUpdateWorkspace?: (id: string, data: Partial<Workspace>) => Promise<void>
   onOpenHelp?: () => void
   onSave?: () => void
   canSave?: boolean
@@ -59,13 +66,238 @@ function TitleBtn({
   )
 }
 
+type WorkspaceMembersHook = ReturnType<typeof useWorkspaceMembers>
+
+function MembersDropdown({ onUpdateWorkspace, hook }: { onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>; hook: WorkspaceMembersHook }) {
+  const { members, pendingInvites, revoke, updateMemberPermission, removeMember } = hook
+  const memberCount = members.length
+  const [open, setOpen] = useState(false)
+  const [selectOpen, setSelectOpen] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null) // userId
+  const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null) // inviteId
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(e: PointerEvent) {
+      if (selectOpen) return
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        setConfirmRemove(null)
+        setConfirmRevoke(null)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [open, selectOpen])
+
+  return (
+    <div ref={ref} className="relative" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors text-xs"
+      >
+        <Users className="h-3.5 w-3.5" />
+        <span>Members{memberCount > 0 ? ` (${memberCount})` : ''}</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-80 bg-popover border border-border rounded-lg shadow-xl z-50 py-1">
+          <>
+            <div className="px-3 pt-2 pb-1">
+              <span className="text-xs font-semibold uppercase tracking-wider text-foreground">Members</span>
+            </div>
+            {members.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">No members yet.</div>
+            ) : (
+              <>
+                {members.map(member => (
+                    <div key={member.userId} className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/10">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{member.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{member.email}</p>
+                      </div>
+                      <Select
+                        value={member.permission}
+                        onOpenChange={setSelectOpen}
+                        onValueChange={v => updateMemberPermission(member.userId, v as WorkspacePermission, onUpdateWorkspace)}
+                      >
+                        <SelectTrigger className="w-28 h-6 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="read">Read only</SelectItem>
+                          <SelectItem value="read-write">Read & write</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {confirmRemove === member.userId ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => { removeMember(member.userId, onUpdateWorkspace); setConfirmRemove(null) }}
+                            className="text-xs px-1.5 py-0.5 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                          >
+                            Remove
+                          </button>
+                          <button
+                            onClick={() => setConfirmRemove(null)}
+                            className="text-xs px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmRemove(member.userId)}
+                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                          title="Remove member"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </>
+            )}
+            {pendingInvites.length > 0 && (
+              <>
+                <div className="my-1 border-t border-border" />
+                <div className="px-3 pt-2 pb-1">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-foreground">Pending invites</span>
+                </div>
+                {pendingInvites.map(invite => (
+                  <div key={invite.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/10">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm truncate">{invite.inviteeEmail}</p>
+                      <p className="text-xs text-muted-foreground">{invite.permission === 'read' ? 'Read only' : 'Read & write'}</p>
+                    </div>
+                    {confirmRevoke === invite.id ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => { revoke(invite.id); setConfirmRevoke(null) }}
+                          className="text-xs px-1.5 py-0.5 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                        >
+                          Revoke
+                        </button>
+                        <button
+                          onClick={() => setConfirmRevoke(null)}
+                          className="text-xs px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmRevoke(invite.id)}
+                        className="text-xs text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function InviteDropdown({ hook }: { hook: WorkspaceMembersHook }) {
+  const { invite } = hook
+  const [email, setEmail] = useState('')
+  const [permission, setPermission] = useState<WorkspacePermission>('read')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [sent, setSent] = useState(false)
+
+  const emailValid = EMAIL_RE.test(email.trim())
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const trimmed = email.trim()
+    if (!trimmed || !emailValid) return
+    setLoading(true)
+    setError('')
+    try {
+      await invite(trimmed, permission)
+      setSent(true)
+      setTimeout(() => { setSent(false); setEmail(''); setPermission('read') }, 1500)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send invite')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <DropdownMenu onOpenChange={() => { setEmail(''); setPermission('read'); setError(''); setSent(false) }}>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors text-xs"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <UserPlus className="h-3.5 w-3.5" />
+          Invite
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72 p-3" onCloseAutoFocus={e => e.preventDefault()}>
+        {sent ? (
+          <p className="text-sm text-muted-foreground py-1">Invite sent to {email}.</p>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-2" onClick={e => e.stopPropagation()}>
+            <input
+              type="email"
+              placeholder="colleague@example.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              disabled={loading}
+              autoFocus
+              className={`w-full bg-input border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 placeholder:text-muted-foreground transition-colors ${
+                email && !emailValid
+                  ? 'border-destructive focus:ring-destructive'
+                  : 'border-border focus:ring-primary'
+              }`}
+            />
+            {email && !emailValid && (
+              <p className="text-xs text-destructive">Enter a valid email address.</p>
+            )}
+            <div className="flex gap-2">
+              <Select value={permission} onValueChange={v => setPermission(v as WorkspacePermission)}>
+                <SelectTrigger className="flex-1 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="read"><span className="flex items-center gap-1.5"><Eye className="h-3.5 w-3.5" />Read only</span></SelectItem>
+                  <SelectItem value="read-write"><span className="flex items-center gap-1.5"><Shield className="h-3.5 w-3.5" />Read & write</span></SelectItem>
+                </SelectContent>
+              </Select>
+              <button
+                type="submit"
+                disabled={loading || !emailValid}
+                className="flex items-center gap-1.5 px-3 h-8 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+              >
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+                Send
+              </button>
+            </div>
+            {error && <p className="text-xs text-destructive">{error}</p>}
+          </form>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function TitleBar({
   workspaceDropdown,
   environments,
   activeWorkspace,
   isOwner,
-  onOpenMembers,
-  onOpenInvite,
+  onUpdateWorkspace,
   onOpenHelp,
   onSave,
   canSave,
@@ -73,6 +305,7 @@ export function TitleBar({
   const [isElectron, setIsElectron] = useState(false)
   const { state, logout } = useAuth()
   const { invites } = useMyInvites()
+  const membersHook = useWorkspaceMembers(activeWorkspace ?? null)
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -83,7 +316,6 @@ export function TitleBar({
   if (!isElectron) return null
 
   const user = state.status === 'authenticated' ? state.session.user : null
-  const memberCount = activeWorkspace?.members?.length ?? 0
 
   return (
     <div
@@ -125,17 +357,11 @@ export function TitleBar({
         className="flex items-center gap-0.5 px-2"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        {/* Members + Invite (owner only) */}
-        {isOwner && activeWorkspace && (
+        {/* Members + Invite dropdowns (owner only) */}
+        {isOwner && activeWorkspace && onUpdateWorkspace && (
           <>
-            <TitleBtn onClick={onOpenMembers} title="Manage members">
-              <Users className="h-3.5 w-3.5" />
-              Members{memberCount > 0 ? ` (${memberCount})` : ''}
-            </TitleBtn>
-            <TitleBtn onClick={onOpenInvite} title="Invite member">
-              <UserPlus className="h-3.5 w-3.5" />
-              Invite
-            </TitleBtn>
+            <MembersDropdown onUpdateWorkspace={onUpdateWorkspace} hook={membersHook} />
+            <InviteDropdown hook={membersHook} />
             <Sep />
           </>
         )}

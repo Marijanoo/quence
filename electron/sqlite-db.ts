@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import * as path from 'path'
 import { app } from 'electron'
+import bcrypt from 'bcryptjs'
 
 // ── Database setup ────────────────────────────────────────────────────────────
 
@@ -140,17 +141,20 @@ function migrate(db: Database.Database) {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function dbRegister(id: string, email: string, name: string, password: string) {
+export async function dbRegister(email: string, name: string, password: string) {
   const now = Date.now()
+  const id = crypto.randomUUID()
+  const hash = await bcrypt.hash(password, 10)
   const stmt = db().prepare('INSERT INTO users (id, email, name, password, created_at) VALUES (?, ?, ?, ?, ?)')
-  stmt.run(id, email, name, password, now)
-  return { id, email, name }
+  stmt.run(id, email.toLowerCase(), name, hash, now)
+  return { id, email: email.toLowerCase(), name }
 }
 
 export async function dbLogin(email: string, password: string) {
-  const row = db().prepare('SELECT id, email, name, password FROM users WHERE email = ?').get(email) as any
+  const row = db().prepare('SELECT id, email, name, password FROM users WHERE email = ?').get(email.toLowerCase()) as any
   if (!row) throw new Error('Invalid email or password')
-  if (row.password !== password) throw new Error('Invalid email or password')
+  const ok = await bcrypt.compare(password, row.password)
+  if (!ok) throw new Error('Invalid email or password')
   return { id: row.id as string, email: row.email as string, name: row.name as string }
 }
 

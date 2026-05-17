@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { WorkspaceInvite, WorkspaceMember, WorkspacePermission, Workspace } from '@/lib/db/types'
 import {
   sendInvite,
@@ -48,30 +48,33 @@ export function useMyInvites() {
 export function useWorkspaceMembers(workspace: Workspace | null) {
   const { state } = useAuth()
   const [pendingInvites, setPendingInvites] = useState<WorkspaceInvite[]>([])
+  const workspaceRef = useRef(workspace)
+  useEffect(() => { workspaceRef.current = workspace }, [workspace])
 
   const refresh = useCallback(async () => {
-    if (!workspace) return
-    const data = await getInvitesForWorkspace(workspace.id)
+    if (!workspaceRef.current) return
+    const data = await getInvitesForWorkspace(workspaceRef.current.id)
     setPendingInvites(data)
-  }, [workspace])
+  }, [])
 
   useEffect(() => { refresh() }, [refresh])
 
   const invite = useCallback(
     async (inviteeEmail: string, permission: WorkspacePermission) => {
-      if (!workspace || state.status !== 'authenticated') return
+      const ws = workspaceRef.current
+      if (!ws || state.status !== 'authenticated') return
       const { user } = state.session
       await sendInvite({
-        workspaceId: workspace.id,
-        workspaceName: workspace.name,
+        workspaceId: ws.id,
+        workspaceName: ws.name,
         ownerEmail: user.email,
         ownerName: user.name,
         inviteeEmail,
         permission,
-      })
+      }, ws)
       await refresh()
     },
-    [workspace, state, refresh]
+    [state, refresh]
   )
 
   const revoke = useCallback(
@@ -88,13 +91,14 @@ export function useWorkspaceMembers(workspace: Workspace | null) {
       permission: WorkspacePermission,
       updateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
     ) => {
-      if (!workspace) return
-      const updated = workspace.members.map(m =>
+      const ws = workspaceRef.current
+      if (!ws) return
+      const updated = ws.members.map(m =>
         m.userId === memberId ? { ...m, permission } : m
       )
-      await updateWorkspace(workspace.id, { members: updated })
+      await updateWorkspace(ws.id, { members: updated })
     },
-    [workspace]
+    []
   )
 
   const removeMember = useCallback(
@@ -102,11 +106,12 @@ export function useWorkspaceMembers(workspace: Workspace | null) {
       memberId: string,
       updateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
     ) => {
-      if (!workspace) return
-      const updated = workspace.members.filter(m => m.userId !== memberId)
-      await updateWorkspace(workspace.id, { members: updated })
+      const ws = workspaceRef.current
+      if (!ws) return
+      const updated = ws.members.filter(m => m.userId !== memberId)
+      await updateWorkspace(ws.id, { members: updated })
     },
-    [workspace]
+    []
   )
 
   const isOwner = state.status === 'authenticated' && workspace?.ownerId === state.session.user.id

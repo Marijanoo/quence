@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { ResponseData } from '@/lib/db/types'
 import { CodeViewer } from './code-viewer'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ interface ResponseViewerProps {
   response: ResponseData | null
   isLoading: boolean
   historyTimestamp?: number | null
+  scrollResetKey?: number
 }
 
 function formatSize(bytes: number): string {
@@ -48,7 +49,7 @@ function base64ToBlobUrl(b64: string, mimeType: string): string {
   return URL.createObjectURL(new Blob([bytes], { type: mimeType }))
 }
 
-export function ResponseViewer({ response, isLoading, historyTimestamp }: ResponseViewerProps) {
+export function ResponseViewer({ response, isLoading, historyTimestamp, scrollResetKey }: ResponseViewerProps) {
   const [copied, setCopied] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [previewMode, setPreviewMode] = useState<'file' | 'raw'>('file')
@@ -197,7 +198,7 @@ export function ResponseViewer({ response, isLoading, historyTimestamp }: Respon
               )}
             </div>
           ) : (
-            <CodeViewer data={response.body} language={ct.includes('application/json') ? 'json' : isHtml ? 'html' : 'auto'} className="h-full" />
+            <CodeViewer data={response.body} language={ct.includes('application/json') ? 'json' : isHtml ? 'html' : 'auto'} className="h-full" scrollResetKey={scrollResetKey} />
           )}
         </TabsContent>
 

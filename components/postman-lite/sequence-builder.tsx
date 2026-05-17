@@ -10,6 +10,7 @@ import { ResponseViewer } from './response-viewer'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Play, Plus, Trash2, GripVertical, X, FileJson, Square, Zap, ChevronRight, MoreHorizontal, Pencil, ListOrdered, ArrowLeft } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { VariableHighlightInput } from './variable-highlight-input'
 import { useEnvironmentContext } from './environment-context'
 
@@ -331,24 +332,6 @@ export function SequenceBuilder({
             <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
-        {isCreating && (
-          <div className="px-2 py-2 flex gap-1 border-b border-border">
-            <Input
-              autoFocus
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleCreate()
-                if (e.key === 'Escape') { setIsCreating(false); setNewName('') }
-              }}
-              placeholder="Sequence name"
-              className="h-7 text-xs"
-            />
-            <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={handleCreate}>
-              <Plus className="h-3 w-3" />
-            </Button>
-          </div>
-        )}
         <div className="flex-1 overflow-auto py-1 min-h-0">
           {sequences.map(seq => (
             <div
@@ -673,6 +656,29 @@ export function SequenceBuilder({
       </div>
       </ResizablePanel>
       </ResizablePanelGroup>
+
+      {/* New sequence dialog */}
+      <Dialog open={isCreating} onOpenChange={o => { if (!o) { setIsCreating(false); setNewName('') } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New Sequence</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleCreate()
+              if (e.key === 'Escape') { setIsCreating(false); setNewName('') }
+            }}
+            placeholder="Sequence name…"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setIsCreating(false); setNewName('') }}>Cancel</Button>
+            <Button onClick={handleCreate} disabled={!newName.trim()}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

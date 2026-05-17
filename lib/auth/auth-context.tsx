@@ -13,6 +13,10 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function apiBase(): string {
+  return process.env.NEXT_PUBLIC_API_URL ?? 'https://quence.kolaj.fun'
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading' })
 
@@ -23,17 +27,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setState({ status: 'unauthenticated' })
         return
       }
-      // Validate the cached session — user must exist in Postgres
       try {
-        const exists = await window.electronAPI?.db.auth.userExists(session.user.id)
-        if (exists) {
+        const res = await fetch(`${apiBase()}/auth/me`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        })
+        if (res.ok) {
           setState({ status: 'authenticated', session })
         } else {
           mockLogout()
           setState({ status: 'unauthenticated' })
         }
       } catch {
-        // If we can't reach the DB, trust the cached session for now
+        // Network offline — trust the cached session
         setState({ status: 'authenticated', session })
       }
     }
@@ -52,6 +57,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     mockLogout()
+    // Reset the DB singleton so the next login gets a fresh adapter with the new userId
+    import('@/lib/db').then(({ resetDatabase }) => resetDatabase())
     setState({ status: 'unauthenticated' })
   }, [])
 

@@ -55,6 +55,7 @@ import { TextDiff } from './text-diff-panel'
 import { WorkspaceDropdown } from './workspace-dropdown'
 import { WorkspaceInviteDialog } from './workspace-invite-dialog'
 import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
+import { UpdateBar } from './update-bar'
 import { useAuth } from '@/lib/auth/auth-context'
 import type { Workspace } from '@/lib/db/types'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
@@ -92,11 +93,19 @@ function friendlySocketError(message: string): string {
   return friendlyNetworkError(message)
 }
 
-export function PostmanLite() {
+interface PostmanLiteProps {
+  updateProgress?: number | null
+  updateDownloaded?: boolean
+  onInstallUpdate?: () => void
+  onDismissUpdate?: () => void
+}
+
+export function PostmanLite({ updateProgress = null, updateDownloaded = false, onInstallUpdate, onDismissUpdate }: PostmanLiteProps = {}) {
   const { state: authState } = useAuth()
   const currentUser = authState.status === 'authenticated' ? authState.session.user : null
 
   const [isLoading, setIsLoading] = useState(false)
+  const [scrollResetKey, setScrollResetKey] = useState(0)
   const abortControllerRef = useRef<AbortController | null>(null)
   const requestGenerationRef = useRef(0)
   const activeElectronRequestIdRef = useRef<string | null>(null)
@@ -127,6 +136,12 @@ export function PostmanLite() {
   const lastRequestTabIdRef = useRef<string | null>(null)
 
   const activeSocketTab = socketTabs.find(t => t.id === activeSocketTabId) ?? null
+
+  const [flashTabId, setFlashTabId] = useState<string | null>(null)
+  const flashTab = useCallback((id: string) => {
+    setFlashTabId(null)
+    requestAnimationFrame(() => setFlashTabId(id))
+  }, [])
 
   // Per-tab active request panel (params/headers/body/auth)
   const [requestTabMap, setRequestTabMap] = useState<Record<string, string>>({})
@@ -373,6 +388,11 @@ export function PostmanLite() {
       }
 
       if (generation !== requestGenerationRef.current) return
+
+      // Scroll to top only if the response body changed
+      if (responseData.body !== activeTab.response?.body) {
+        setScrollResetKey(k => k + 1)
+      }
 
       // Update tab with response
       await setActiveResponse(responseData)
@@ -921,20 +941,34 @@ export function PostmanLite() {
     const existing = tabs.find(t => t.requestId === request.id)
     if (existing) {
       setActiveSocketTabId(null)
-      await setActiveTab(existing.id)
+      if (existing.id === activeTabId && !activeSocketTabId) {
+        flashTab(existing.id)
+      } else {
+        await setActiveTab(existing.id)
+      }
     } else {
       setActiveSocketTabId(null)
       await createTab({ ...request }, request.id)
     }
     setActiveView('requests')
-  }, [tabs, createTab, setActiveTab])
+  }, [tabs, activeTabId, activeSocketTabId, flashTab, createTab, setActiveTab])
 
   // Open history entry as a read-only snapshot tab
   const openHistoryEntry = useCallback(async (entry: HistoryEntry) => {
-    const request = createNewRequest({ ...entry.request, id: generateId() })
-    await createTab(request, undefined, { response: entry.response, isHistorical: true, historyTimestamp: entry.timestamp })
+    const existing = tabs.find(t => t.historyTimestamp === entry.timestamp)
+    if (existing) {
+      setActiveSocketTabId(null)
+      if (existing.id === activeTabId && !activeSocketTabId) {
+        flashTab(existing.id)
+      } else {
+        await setActiveTab(existing.id)
+      }
+    } else {
+      const request = createNewRequest({ ...entry.request, id: generateId() })
+      await createTab(request, undefined, { response: entry.response, isHistorical: true, historyTimestamp: entry.timestamp })
+    }
     setActiveView('requests')
-  }, [createTab, setActiveView])
+  }, [tabs, activeTabId, activeSocketTabId, flashTab, createTab, setActiveTab, setActiveView])
 
   // Save current request to collection, then optionally close the tab
   const saveCurrentRequest = useCallback(async () => {
@@ -950,8 +984,9 @@ export function PostmanLite() {
     }
 
     await createRequest(request)
-    await markTabSaved(tabToSave.id, request.id)
-    await updateTab(tabToSave.id, { request, isDirty: false })
+    // Single atomic update: set requestId, savedRequest, and request in one call
+    // so openRequest() always finds the tab by requestId without a race condition
+    await updateTab(tabToSave.id, { requestId: request.id, request, savedRequest: request, isDirty: false })
     await refreshRequests()
 
     setSaveRequestName('')
@@ -1319,7 +1354,6 @@ export function PostmanLite() {
               onImport={() => workspaceImportRef.current?.click()}
               onExportAll={handleExportAll}
               onImportAll={() => allDataImportRef.current?.click()}
-              onManageAccess={ws => setInviteDialogWorkspace(ws)}
               onUpdateWorkspace={updateWorkspace}
               getWorkspace={(id) => workspaces.find(w => w.id === id)}
             />
@@ -1333,8 +1367,7 @@ export function PostmanLite() {
           }
           activeWorkspace={activeWorkspace}
           isOwner={isOwner}
-          onOpenMembers={() => activeWorkspace && setInviteDialogWorkspace(activeWorkspace)}
-          onOpenInvite={() => activeWorkspace && setQuickInviteWorkspace(activeWorkspace)}
+          onUpdateWorkspace={updateWorkspace}
           onOpenHelp={() => setIsHelpOpen(true)}
           onSave={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
           canSave={canWrite && (!!activeTab || !!activeSocketTab)}
@@ -1393,8 +1426,8 @@ export function PostmanLite() {
             onDeleteSocketConfig={canWrite ? removeSocketConfig : () => {}}
             sequenceDragMode={activeView === 'sequences'}
             onOpenHistoryEntry={openHistoryEntry}
-            onDeleteHistoryEntry={removeHistoryEntry}
-            onClearHistory={clearHistory}
+            onDeleteHistoryEntry={canWrite ? removeHistoryEntry : () => {}}
+            onClearHistory={canWrite ? clearHistory : () => {}}
             onCreateEnvironment={canWrite ? createEnvironment : () => {}}
             onImportEnvironment={canWrite ? importEnvironment : () => {}}
             onDeleteEnvironment={canWrite ? removeEnvironment : () => {}}
@@ -1448,6 +1481,7 @@ export function PostmanLite() {
               socketTabs={socketTabs}
               tabOrder={tabOrder}
               activeTabId={activeSocketTab ? activeSocketTabId : activeTabId}
+              flashTabId={flashTabId}
               onSelectTab={handleSelectTab}
               onCloseTab={handleUnifiedCloseTab}
               onNewTab={() => { setActiveSocketTabId(null); createTab() }}
@@ -1533,6 +1567,7 @@ export function PostmanLite() {
                       response={activeTab?.response || null}
                       isLoading={isLoading}
                       historyTimestamp={activeTab?.historyTimestamp}
+                      scrollResetKey={scrollResetKey}
                     />
                   </ResizablePanel>
                 </ResizablePanelGroup>
@@ -1546,18 +1581,30 @@ export function PostmanLite() {
 
       {/* Bottom bar */}
       <div className="flex items-center justify-between px-3 h-7 border-t border-border bg-card shrink-0">
-        <button
-          onClick={() => setIsSettingsOpen(o => !o)}
-          title="Appearance settings"
-          className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-            isSettingsOpen
-              ? 'text-foreground bg-accent/20'
-              : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-          }`}
-        >
-          <Settings2 className="h-3.5 w-3.5" />
-          <span>Appearance</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsSettingsOpen(o => !o)}
+            title="Appearance settings"
+            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+              isSettingsOpen
+                ? 'text-foreground bg-accent/20'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+            }`}
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            <span>Appearance</span>
+          </button>
+          <span className="text-xs text-muted-foreground/40 select-none">v0.1.1</span>
+        </div>
+
+        {updateProgress !== null && (
+          <UpdateBar
+            progress={updateProgress}
+            downloaded={updateDownloaded}
+            onInstall={() => onInstallUpdate?.()}
+            onDismiss={() => onDismissUpdate?.()}
+          />
+        )}
 
         <div className="flex items-center gap-1">
           <button

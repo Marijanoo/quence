@@ -21,6 +21,7 @@ interface HistoryPanelProps {
   onOpenRequest: (entry: HistoryEntry) => void
   onDeleteEntry: (id: string) => void
   onClearHistory: () => void
+  readOnly?: boolean
 }
 
 const methodColors: Record<HttpMethod, string> = {
@@ -65,12 +66,13 @@ export function HistoryPanel({
   onOpenRequest,
   onDeleteEntry,
   onClearHistory,
+  readOnly,
 }: HistoryPanelProps) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h3 className="text-sm font-medium text-foreground">History</h3>
-        {history.length > 0 && (
+        {history.length > 0 && !readOnly && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="ghost" size="sm" className="h-6 text-xs text-muted-foreground">
@@ -134,14 +136,16 @@ export function HistoryPanel({
                     </div>
                   </div>
                 </button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 opacity-0 group-hover:opacity-100"
-                  onClick={() => onDeleteEntry(entry.id)}
-                >
-                  <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                </Button>
+                {!readOnly && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 opacity-0 group-hover:opacity-100"
+                    onClick={() => onDeleteEntry(entry.id)}
+                  >
+                    <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>

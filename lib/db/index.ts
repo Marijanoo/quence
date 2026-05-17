@@ -10,6 +10,7 @@ import type {
 } from './types'
 
 export interface DatabaseAdapter {
+  userId?: string
   init(): Promise<void>
 
   getWorkspaces(): Promise<Workspace[]>
@@ -60,7 +61,6 @@ let dbInitPromise: Promise<DatabaseAdapter> | null = null
 
 export async function getDatabase(userId?: string): Promise<DatabaseAdapter> {
   if (dbInstance) {
-    // Update userId on the existing instance when provided
     if (userId && 'userId' in dbInstance) {
       (dbInstance as any).userId = userId
     }
@@ -70,8 +70,8 @@ export async function getDatabase(userId?: string): Promise<DatabaseAdapter> {
 
   dbInitPromise = (async () => {
     try {
-      const { PostgresAdapter } = await import('./postgres-adapter')
-      const adapter = new PostgresAdapter()
+      const { HybridAdapter } = await import('./hybrid-adapter')
+      const adapter = new HybridAdapter()
       if (userId) adapter.userId = userId
       await adapter.init()
       dbInstance = adapter
@@ -86,6 +86,11 @@ export async function getDatabase(userId?: string): Promise<DatabaseAdapter> {
 
 export function setDatabaseInstance(adapter: DatabaseAdapter) {
   dbInstance = adapter
+}
+
+export function resetDatabase() {
+  dbInstance = null
+  dbInitPromise = null
 }
 
 export * from './types'
