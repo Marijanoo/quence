@@ -53,6 +53,17 @@ export function ResponseViewer({ response, isLoading, historyTimestamp, scrollRe
   const [copied, setCopied] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [previewMode, setPreviewMode] = useState<'file' | 'raw'>('file')
+  const [completing, setCompleting] = useState(false)
+  const prevLoadingRef = useRef(false)
+
+  useEffect(() => {
+    if (prevLoadingRef.current && !isLoading) {
+      setCompleting(true)
+      const t = setTimeout(() => setCompleting(false), 300)
+      return () => clearTimeout(t)
+    }
+    prevLoadingRef.current = isLoading
+  }, [isLoading])
 
   // Reset preview mode when response changes
   useEffect(() => { setPreviewMode('file') }, [response?.body])
@@ -93,7 +104,7 @@ export function ResponseViewer({ response, isLoading, historyTimestamp, scrollRe
     document.body.removeChild(a)
   }
 
-  if (isLoading) {
+  if (isLoading && !response) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent mb-4" />
@@ -123,7 +134,16 @@ export function ResponseViewer({ response, isLoading, historyTimestamp, scrollRe
   const defaultTab = hasPreview ? 'preview' : 'body'
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
+      {(isLoading || completing) && (
+        <div className="absolute inset-x-0 top-0 h-0.5 z-10 overflow-hidden">
+          {completing ? (
+            <div className="h-full bg-primary transition-all duration-200 ease-out" style={{ width: '100%' }} />
+          ) : (
+            <div className="h-full bg-primary animate-[loading-bar_1.2s_ease-in-out_infinite]" style={{ width: '40%' }} />
+          )}
+        </div>
+      )}
       {historyTimestamp && (
         <div className="flex items-center gap-2 px-4 py-2 bg-[oklch(0.75_0.18_80)]/10 border-b border-[oklch(0.75_0.18_80)]/30 text-[oklch(0.75_0.18_80)] text-xs shrink-0">
           <History className="h-3.5 w-3.5 shrink-0" />

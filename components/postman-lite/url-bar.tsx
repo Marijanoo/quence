@@ -22,7 +22,7 @@ interface UrlBarProps {
   onMethodChange: (method: HttpMethod) => void
   onUrlChange: (url: string) => void
   onCurlImport: (updates: Partial<RequestConfig>) => void
-  onSend: () => void
+  onSend: (urlOverride?: string) => void
   onCancel: () => void
   isLoading: boolean
   readOnly?: boolean
@@ -107,9 +107,10 @@ export function UrlBar({
       <div className="flex-1">
         <VariableHighlightInput
           value={url}
+          resetKey={request.id}
           onChange={readOnly ? () => {} : onUrlChange}
           onPaste={readOnly ? undefined : handlePaste}
-          onEnter={readOnly ? undefined : onSend}
+          onEnter={readOnly ? undefined : (currentValue) => onSend(currentValue)}
           placeholder="Enter request URL or paste a curl command"
           className={cn('bg-secondary border-border', readOnly && 'opacity-70 cursor-default')}
           variables={variables}
@@ -140,7 +141,7 @@ export function UrlBar({
         </Button>
       ) : (
         <Button
-          onClick={onSend}
+          onClick={() => onSend()}
           disabled={!url}
           className="bg-primary text-primary-foreground hover:bg-primary/90 px-6"
         >

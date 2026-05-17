@@ -197,6 +197,7 @@ export interface WorkspaceTab {
   requestId?: string // If saved to a collection
   request: RequestConfig
   savedRequest?: RequestConfig // Snapshot at last save — used to detect real changes
+  serverUpdatedAt?: number // updatedAt from server when last loaded/saved — used for conflict detection
   response: ResponseData | null
   isDirty: boolean
   isHistorical?: boolean // Opened from history — snapshot, cannot send

@@ -10,9 +10,10 @@ import { Check, X } from 'lucide-react'
 
 interface VariableHighlightInputProps {
   value: string
+  resetKey?: string | number  // change to force a full reset (tab switch, request open)
   onChange: (value: string) => void
   onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void
-  onEnter?: () => void
+  onEnter?: (currentValue: string) => void
   placeholder?: string
   className?: string
   variables: EnvironmentVariable[]
@@ -46,6 +47,7 @@ function extractVariableMatches(text: string): VariableMatch[] {
 
 export function VariableHighlightInput({
   value,
+  resetKey,
   onChange,
   onPaste,
   onEnter,
@@ -74,19 +76,15 @@ export function VariableHighlightInput({
   const skipUndoPushRef = useRef(false)
   const lastEmittedValueRef = useRef(value)
 
-  // Sync with prop value — only reset undo stack when the change came externally (tab switch),
-  // not from our own debounced onChange
+  // Reset when the parent signals a genuine external change (tab switch, request open)
+  // by changing resetKey. This avoids false resets from stale re-renders during async DB writes.
   useEffect(() => {
-    if (value === lastEmittedValueRef.current) {
-      // Our own debounced update bounced back — just keep localValue in sync, don't touch undo stack
-      return
-    }
-    // External change (tab switch, reset) — full reset
     setLocalValue(value)
     undoStackRef.current = [{ value, selStart: 0, selEnd: 0 }]
     undoIndexRef.current = 0
     lastEmittedValueRef.current = value
-  }, [value])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey])
 
   // Capture the input's computed font size so the overlay can match it exactly
   useEffect(() => {
@@ -376,8 +374,10 @@ export function VariableHighlightInput({
     }
 
     if (e.key === 'Enter') {
-      handleChange(localValue, true)
-      onEnter?.()
+      cancelDebouncedOnChange()
+      lastEmittedValueRef.current = localValue
+      onChange(localValue)
+      onEnter?.(localValue)
     }
   }
 

@@ -7,9 +7,6 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu'
 import {
   Dialog,
@@ -20,10 +17,10 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, Mail, X, MoreHorizontal } from 'lucide-react'
-import type { Workspace, WorkspaceInvite, WorkspaceMember } from '@/lib/db/types'
+import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, MoreHorizontal, LogOut } from 'lucide-react'
+import type { Workspace } from '@/lib/db/types'
 import { useAuth } from '@/lib/auth/auth-context'
-import { useMyInvites, buildMemberFromInvite } from '@/hooks/use-collaboration'
+import { leaveWorkspace } from '@/lib/collaboration/store'
 
 interface Props {
   workspaces: Workspace[]
@@ -38,6 +35,7 @@ interface Props {
   onImportAll: () => void
   onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
   getWorkspace: (id: string) => Workspace | undefined
+  onLeave: (id: string) => void
 }
 
 function getInitials(name: string) {
@@ -52,57 +50,78 @@ function WorkspaceAvatar({ name }: { name: string }) {
   )
 }
 
-// Per-row context/actions menu
+// Per-row context/actions menu — plain popover to avoid nested Radix DropdownMenu conflicts
 function WorkspaceActions({
-  ws,
   owned,
   canDelete,
   onRename,
   onDelete,
   onExport,
+  onLeave,
 }: {
-  ws: Workspace
   owned: boolean
   canDelete: boolean
   onRename: () => void
   onDelete: () => void
   onExport: () => void
+  onLeave: () => void
 }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onPointerDown(e: PointerEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [open])
+
+  function act(fn: () => void) {
+    setOpen(false)
+    fn()
+  }
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <span
-          className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          onClick={e => e.stopPropagation()}
-          title="Actions"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40" onClick={e => e.stopPropagation()}>
-        <DropdownMenuItem onSelect={onExport}>
-          <Download className="h-3.5 w-3.5" />
-          Export
-        </DropdownMenuItem>
-        {owned && (
-          <>
-            <DropdownMenuItem onSelect={onRename}>
-              <Pencil className="h-3.5 w-3.5" />
-              Rename
-            </DropdownMenuItem>
-            {canDelete && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div ref={ref} className="relative shrink-0" onClick={e => e.stopPropagation()}>
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+        className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        title="Actions"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-0.5 w-36 bg-popover border border-border rounded-md shadow-lg z-[200] py-1">
+          <button onClick={() => act(onExport)} className="flex items-center gap-2 w-full px-2 py-1.5 text-xs hover:bg-accent transition-colors">
+            <Download className="h-3.5 w-3.5" /> Export
+          </button>
+          {owned ? (
+            <>
+              <button onClick={() => act(onRename)} className="flex items-center gap-2 w-full px-2 py-1.5 text-xs hover:bg-accent transition-colors">
+                <Pencil className="h-3.5 w-3.5" /> Rename
+              </button>
+              {canDelete && (
+                <>
+                  <div className="my-1 border-t border-border" />
+                  <button onClick={() => act(onDelete)} className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-destructive hover:bg-accent transition-colors">
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="my-1 border-t border-border" />
+              <button onClick={() => act(onLeave)} className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-destructive hover:bg-accent transition-colors">
+                <LogOut className="h-3.5 w-3.5" /> Leave
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -119,12 +138,10 @@ export function WorkspaceDropdown({
   onImportAll,
   onUpdateWorkspace,
   getWorkspace,
+  onLeave,
 }: Props) {
   const { state } = useAuth()
-  const currentUser = state.status === 'authenticated' ? state.session.user : null
-  const currentUserId = currentUser?.id ?? null
-
-  const { invites, accept, decline } = useMyInvites()
+  const currentUserId = state.status === 'authenticated' ? state.session.user.id : null
 
   const [open, setOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -154,19 +171,6 @@ export function WorkspaceDropdown({
     const name = renameValue.trim()
     if (name) { onRename(id, name); setRenamingId(null) }
   }, [renameValue, onRename])
-
-  async function handleAccept(invite: WorkspaceInvite) {
-    if (!currentUser) return
-    await accept(invite.id, async (accepted) => {
-      const workspace = await window.electronAPI!.db.workspaces.getOne(accepted.workspaceId)
-      if (!workspace) return
-      const newMember: WorkspaceMember = buildMemberFromInvite(accepted, currentUser.id, currentUser.name)
-      const updatedMembers = [...(workspace.members ?? []).filter((m: WorkspaceMember) => m.userId !== currentUser.id), newMember]
-      await onUpdateWorkspace(workspace.id, { members: updatedMembers })
-      onSelect(workspace.id)
-      setOpen(false)
-    })
-  }
 
   const [contextOpen, setContextOpen] = useState(false)
 
@@ -226,57 +230,18 @@ export function WorkspaceDropdown({
 
                 {/* Actions ... */}
                 <WorkspaceActions
-                  ws={ws}
                   owned={owned}
                   canDelete={workspaces.length > 1}
                   onRename={() => { setRenamingId(ws.id); setRenameValue(ws.name); setOpen(false) }}
                   onDelete={() => { onDelete(ws.id); setOpen(false) }}
                   onExport={() => { onExport(ws.id); setOpen(false) }}
+                  onLeave={() => { onLeave(ws.id); setOpen(false) }}
                 />
               </DropdownMenuItem>
             )
           })}
 
           <DropdownMenuSeparator />
-
-          {/* Invites submenu */}
-          {invites.length > 0 && (
-            <>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Mail className="h-3.5 w-3.5" />
-                  Invites ({invites.length})
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-56">
-                  {invites.map(invite => (
-                    <div key={invite.id} className="flex items-center gap-2 px-2 py-1.5">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate">{invite.workspaceName}</p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {invite.permission === 'read' ? 'Read only' : 'Read & write'} · from {invite.ownerName}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => decline(invite.id)}
-                        className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                        title="Decline"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                      <button
-                        onClick={() => handleAccept(invite)}
-                        className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors shrink-0"
-                        title="Accept"
-                      >
-                        <Check className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSeparator />
-            </>
-          )}
 
           {/* New workspace */}
           <DropdownMenuItem onSelect={() => { setIsCreating(true); setOpen(false) }}>
@@ -309,10 +274,10 @@ export function WorkspaceDropdown({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Right-click context menu - always rendered to prevent remount on second right-click */}
+      {/* Right-click context menu */}
       <DropdownMenu open={contextOpen} onOpenChange={o => { if (!o) { setContextOpen(false); setContextWs(null) } }}>
         <DropdownMenuTrigger asChild>
-          <span className="fixed" style={{ left: contextPos.x, top: contextPos.y, width: 0, height: 0, display: 'block' }} />
+          <span className="fixed" style={{ left: contextPos.x, top: contextPos.y, width: 0, height: 0, display: contextOpen ? 'block' : 'none' }} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
           {contextWs && (

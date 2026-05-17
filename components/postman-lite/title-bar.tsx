@@ -31,6 +31,8 @@ interface TitleBarProps {
   onOpenHelp?: () => void
   onSave?: () => void
   canSave?: boolean
+  onInviteAccepted?: (workspaceId: string) => void
+  onRefreshWorkspaces?: () => Promise<unknown>
 }
 
 function Sep() {
@@ -301,11 +303,20 @@ export function TitleBar({
   onOpenHelp,
   onSave,
   canSave,
+  onInviteAccepted,
+  onRefreshWorkspaces,
 }: TitleBarProps) {
   const [isElectron, setIsElectron] = useState(false)
   const { state, logout } = useAuth()
-  const { invites } = useMyInvites()
+  const { invites, accept, decline } = useMyInvites()
   const membersHook = useWorkspaceMembers(activeWorkspace ?? null)
+
+  async function handleAccept(inviteId: string, workspaceId: string) {
+    await accept(inviteId, async () => {
+      if (onRefreshWorkspaces) await onRefreshWorkspaces()
+    })
+    if (onInviteAccepted) onInviteAccepted(workspaceId)
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -396,11 +407,39 @@ export function TitleBar({
                 )}
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuContent align="end" className="w-64">
               <div className="px-2 py-1.5 space-y-0.5">
                 <p className="text-sm font-medium truncate">{user.name}</p>
                 <p className="text-xs text-muted-foreground truncate">{user.email}</p>
               </div>
+              {invites.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-1">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Invites</p>
+                  </div>
+                  {invites.map(invite => (
+                    <div key={invite.id} className="px-2 py-1.5">
+                      <p className="text-xs font-medium truncate">{invite.workspaceName}</p>
+                      <p className="text-xs text-muted-foreground truncate">from {invite.ownerName}</p>
+                      <div className="flex gap-1.5 mt-1.5">
+                        <button
+                          onClick={() => handleAccept(invite.id, invite.workspaceId)}
+                          className="flex-1 text-xs py-0.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => decline(invite.id)}
+                          className="flex-1 text-xs py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
                 <LogOut className="h-4 w-4" />

@@ -160,6 +160,7 @@ export function useWorkspaceManager() {
     update,
     remove,
     switchTo,
+    refresh,
   }
 }
 
@@ -280,7 +281,12 @@ export function useRequests(collectionId?: string) {
     await refresh()
   }, [db, refresh])
 
-  return { requests, isLoading: isLoading || dbLoading, create, update, remove, importRequests, reorderRequests, refresh }
+  const get = useCallback(async (id: string): Promise<RequestConfig | undefined> => {
+    if (!db) return undefined
+    return db.getRequest(id)
+  }, [db])
+
+  return { requests, isLoading: isLoading || dbLoading, create, update, remove, importRequests, reorderRequests, refresh, get }
 }
 
 // Socket configs hook
@@ -416,7 +422,9 @@ export function useEnvironments(workspaceId?: string | null) {
   const refresh = useCallback(async () => {
     if (!db) return
     const data = await db.getEnvironments(workspaceId ?? undefined)
-    setEnvironments(data.sort((a, b) => a.name.localeCompare(b.name)))
+    const sorted = data.sort((a, b) => a.name.localeCompare(b.name))
+    setEnvironments(sorted)
+    return sorted
   }, [db, workspaceId])
 
   useEffect(() => {
@@ -518,10 +526,7 @@ export function useWorkspace(workspaceId?: string | null) {
   const saveState = useCallback(async (newState: WorkspaceState) => {
     if (!db || !workspaceId) return
     setState(newState)
-    const persistState = {
-      ...newState,
-      tabs: newState.tabs.map(t => ({ ...t, response: null })),
-    }
+    const persistState = newState
     await db.saveWorkspaceState(workspaceId, persistState)
   }, [db, workspaceId])
 
