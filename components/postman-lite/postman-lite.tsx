@@ -58,7 +58,7 @@ import { WorkspaceInviteDialog } from './workspace-invite-dialog'
 import { WorkspaceQuickInviteDialog } from './workspace-quick-invite-dialog'
 import { UpdateBar } from './update-bar'
 import { useAuth } from '@/lib/auth/auth-context'
-import type { Workspace, Environment } from '@/lib/db/types'
+import type { Workspace, Environment, EnvironmentVariable } from '@/lib/db/types'
 import { leaveWorkspace } from '@/lib/collaboration/store'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
 
@@ -521,8 +521,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   }, [])
 
   // Standalone request runner used by sequences (does not touch tab state)
-  const runSingleRequest = useCallback(async (request: RequestConfig, signal?: AbortSignal): Promise<ResponseData> => {
-    const envVariables = activeEnvironment?.variables || []
+  const runSingleRequest = useCallback(async (request: RequestConfig, signal?: AbortSignal, envVariablesOverride?: EnvironmentVariable[]): Promise<ResponseData> => {
+    const envVariables = envVariablesOverride ?? activeEnvironment?.variables ?? []
     let url = parseVariables(request.url, envVariables)
     const enabledParams = request.params.filter(p => p.enabled && p.key)
     if (enabledParams.length > 0) {
@@ -623,6 +623,9 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     seq.steps.forEach(s => { initialResults[s.id] = { stepId: s.id, status: 'idle' } })
     setStepResults(initialResults)
 
+    // Snapshot environment variables so extractions are visible to subsequent steps
+    const liveVars: EnvironmentVariable[] = activeEnvironment ? [...activeEnvironment.variables] : []
+
     // Recursive step runner. Top-level steps write into setStepResults directly.
     // Sub-sequence steps collect results into a local record returned to the caller,
     // which stores them in the parent step's subResults — never in the global map.
@@ -681,12 +684,15 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                 continue
               }
               const strValue = typeof value === 'string' ? value : JSON.stringify(value)
+              // Update liveVars so subsequent steps in this run see the new value
+              const existingIdx = liveVars.findIndex(v => v.key === envVariable)
+              if (existingIdx >= 0) {
+                liveVars[existingIdx] = { ...liveVars[existingIdx], value: strValue }
+              } else {
+                liveVars.push({ id: generateId(), key: envVariable, value: strValue, enabled: true })
+              }
               if (activeEnvironment) {
-                const existing = activeEnvironment.variables.find(v => v.key === envVariable)
-                const updatedVars = existing
-                  ? activeEnvironment.variables.map(v => v.key === envVariable ? { ...v, value: strValue } : v)
-                  : [...activeEnvironment.variables, { id: generateId(), key: envVariable, value: strValue, enabled: true }]
-                await updateEnvironment(activeEnvironment.id, { variables: updatedVars })
+                await updateEnvironment(activeEnvironment.id, { variables: [...liveVars] })
               }
               reportResult(step.id, { stepId: step.id, status: 'success', extractedValue: strValue })
             } catch {
@@ -704,7 +710,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
         }
         const start = Date.now()
         try {
-          const response = await runSingleRequest(fullRequest, controller.signal)
+          const response = await runSingleRequest(fullRequest, controller.signal, liveVars)
           const duration = Date.now() - start
           if (controller.signal.aborted) {
             reportResult(step.id, { stepId: step.id, status: 'skipped' })
