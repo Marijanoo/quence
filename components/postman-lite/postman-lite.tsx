@@ -2,7 +2,7 @@
 
 import { version } from '@/package.json'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import type { RequestConfig, ResponseData, HistoryEntry, Collection, SocketConfig, SocketTab, SocketMessage, SocketMessageType, SocketProtocol, Sequence, SequenceStepResult } from '@/lib/db/types'
+import type { RequestConfig, ResponseData, HistoryEntry, Collection, SocketConfig, SocketTab, SocketMessage, SocketMessageType, SocketProtocol, Sequence, SequenceStep, SequenceStepResult } from '@/lib/db/types'
 import { createNewRequest, createNewSocketConfig } from '@/lib/db/types'
 import { generateId } from '@/lib/utils'
 import {
@@ -128,6 +128,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   const [quickInviteWorkspace, setQuickInviteWorkspace] = useState<Workspace | null>(null)
   const [switchingToName, setSwitchingToName] = useState<string | null>(null)
   const [conflictRequest, setConflictRequest] = useState<RequestConfig | null>(null)
+  const [conflictSocketConfig, setConflictSocketConfig] = useState<SocketConfig | null>(null)
   const [deletedNotice, setDeletedNotice] = useState<{ type: 'workspace' | 'environment'; name: string } | null>(null)
 
   // Socket tab state (kept in memory only — not persisted to DB, connections are ephemeral)
@@ -218,6 +219,14 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   const { sequences, create: createSequence, update: updateSequence, remove: removeSequence } = useSequences(safeWorkspaceId)
   const { history, add: addToHistory, remove: removeHistoryEntry, clear: clearHistory } = useHistory(safeWorkspaceId)
   const { environments, activeEnvironment, create: createEnvironment, update: updateEnvironment, remove: removeEnvironment, setActive: setActiveEnvironment, importEnvironment, refresh: refreshEnvironments } = useEnvironments(safeWorkspaceId)
+
+  // Trigger refetch of global resources when workspace changes
+  useEffect(() => {
+    if (!workspaceManagerLoading) {
+      refreshRequests()
+      refreshSocketConfigs()
+    }
+  }, [safeWorkspaceId, refreshRequests, refreshSocketConfigs, workspaceManagerLoading])
 
   // Called after a workspace refresh — handles active workspace being deleted/removed
   const checkWorkspaceStillExists = useCallback((refreshed: Workspace[]) => {
@@ -321,7 +330,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   }, [tabs])
 
   // Live polling for cloud workspaces
-  const isCloudWorkspace = (activeWorkspace?.members?.length ?? 0) > 0
+  const isCloudWorkspace = activeWorkspace?.isSynced || (activeWorkspace?.members?.length ?? 0) > 0
   const checkWorkspaceStillExistsRef = useRef(checkWorkspaceStillExists)
   const checkActiveEnvironmentStillExistsRef = useRef(checkActiveEnvironmentStillExists)
   useEffect(() => { checkWorkspaceStillExistsRef.current = checkWorkspaceStillExists }, [checkWorkspaceStillExists])
@@ -337,6 +346,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
         refreshEnvironments(),
         refreshCollections(),
         refreshRequests(),
+        refreshSocketConfigs(),
       ] as const)
       if (refreshedWorkspaces) checkWorkspaceStillExistsRef.current(refreshedWorkspaces)
       if (refreshedEnvs) checkActiveEnvironmentStillExistsRef.current(refreshedEnvs)
@@ -635,6 +645,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       visited: Set<string>,
       reportResult: (stepId: string, result: SequenceStepResult) => void,
     ): Promise<string | null> => {
+      let lastRequestStep: SequenceStep | null = null
+
       for (const step of steps) {
         if (sequenceAbortRef.current || controller.signal.aborted) {
           reportResult(step.id, { stepId: step.id, status: 'skipped' })
@@ -678,18 +690,18 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
             }
             try {
               const parsed = JSON.parse(lastBody)
-              const value = jsonKey.split('.').reduce((obj, key) => obj?.[key], parsed as Record<string, unknown>)
+              const value = jsonKey!.split('.').reduce((obj, key) => obj?.[key], parsed as any)
               if (value === undefined || value === null) {
                 reportResult(step.id, { stepId: step.id, status: 'error', error: `Key "${jsonKey}" not found in response` })
                 continue
               }
               const strValue = typeof value === 'string' ? value : JSON.stringify(value)
               // Update liveVars so subsequent steps in this run see the new value
-              const existingIdx = liveVars.findIndex(v => v.key === envVariable)
+              const existingIdx = liveVars.findIndex(v => v.key === envVariable!)
               if (existingIdx >= 0) {
                 liveVars[existingIdx] = { ...liveVars[existingIdx], value: strValue }
               } else {
-                liveVars.push({ id: generateId(), key: envVariable, value: strValue, enabled: true })
+                liveVars.push({ id: generateId(), key: envVariable!, value: strValue, enabled: true })
               }
               if (activeEnvironment) {
                 await updateEnvironment(activeEnvironment.id, { variables: [...liveVars] })
@@ -698,11 +710,64 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
             } catch {
               reportResult(step.id, { stepId: step.id, status: 'error', error: 'Response is not valid JSON' })
             }
+          } else if (type === 'repeat') {
+            if (!lastRequestStep) {
+              reportResult(step.id, { stepId: step.id, status: 'error', error: 'No previous request to repeat' })
+              continue
+            }
+            const count = step.action.repeatCount ?? 1
+            const iterations: SequenceStepResult[] = []
+            reportResult(step.id, { stepId: step.id, status: 'running', iterations: [] })
+
+            let successCount = 0
+            for (let iter = 0; iter < count; iter++) {
+              if (sequenceAbortRef.current || controller.signal.aborted) break
+              
+              const fullRequest = requests.find(r => r.id === lastRequestStep!.requestId)
+              if (!fullRequest) {
+                iterations.push({ stepId: `iter-${iter}`, status: 'error', error: 'Request not found in collections' })
+                reportResult(step.id, { stepId: step.id, status: 'running', iterations: [...iterations] })
+                continue
+              }
+
+              const start = Date.now()
+              try {
+                const response = await runSingleRequest(fullRequest, controller.signal, liveVars)
+                const duration = Date.now() - start
+                if (controller.signal.aborted) break
+
+                lastBody = response.body
+                const ok = response.status >= 200 && response.status < 300
+                if (ok) successCount++
+
+                iterations.push({
+                  stepId: `iter-${iter}`,
+                  status: ok ? 'success' : 'error',
+                  statusCode: response.status,
+                  statusText: response.statusText,
+                  duration,
+                  response,
+                })
+                reportResult(step.id, { stepId: step.id, status: 'running', iterations: [...iterations] })
+              } catch (err) {
+                const duration = Date.now() - start
+                if (err instanceof Error && err.name === 'AbortError') break
+                
+                const msg = err instanceof Error ? err.message : 'Unknown error'
+                lastBody = null
+                iterations.push({ stepId: `iter-${iter}`, status: 'error', error: friendlyNetworkError(msg), duration })
+                reportResult(step.id, { stepId: step.id, status: 'running', iterations: [...iterations] })
+              }
+            }
+
+            const allOk = successCount === count
+            reportResult(step.id, { stepId: step.id, status: allOk ? 'success' : 'error', iterations: [...iterations] })
           }
           continue
         }
 
         // ── Request step ────────────────────────────────────────────────────
+        lastRequestStep = step
         const fullRequest = requests.find(r => r.id === step.requestId)
         if (!fullRequest) {
           reportResult(step.id, { stepId: step.id, status: 'error', error: 'Request not found in collections' })
@@ -763,6 +828,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       messages: [],
       isDirty: false,
       connectionStatus: 'disconnected',
+      serverUpdatedAt: config?.updatedAt,
     }
     setSocketTabs(prev => [...prev, tab])
     setTabOrder(prev => [...prev, { id: tab.id, kind: 'socket' }])
@@ -1124,7 +1190,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     if (!activeTab) return
     if (activeTab.requestId) {
       // Conflict check for cloud workspaces
-      const isCloud = (activeWorkspace?.members?.length ?? 0) > 0
+      const isCloud = activeWorkspace?.isSynced || (activeWorkspace?.members?.length ?? 0) > 0
       if (isCloud && activeTab.serverUpdatedAt !== undefined) {
         const serverRequest = await getRequest(activeTab.requestId)
         if (serverRequest && serverRequest.updatedAt !== activeTab.serverUpdatedAt) {
@@ -1164,14 +1230,28 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     setIsSaveSocketDialogOpen(false)
   }, [socketTabs, activeSocketTabId, saveSocketName, saveSocketCollectionId, createSocketConfig, dbUpdateSocketConfig, refreshSocketConfigs])
 
-  const openSaveSocketDialog = useCallback(() => {
+  const openSaveSocketDialog = useCallback(async () => {
     const tab = socketTabs.find(t => t.id === activeSocketTabId)
     if (!tab) return
     if (tab.socketId) {
+      // Conflict check for cloud workspaces
+      const isCloud = activeWorkspace?.isSynced || (activeWorkspace?.members?.length ?? 0) > 0
+      if (isCloud && tab.serverUpdatedAt !== undefined) {
+        const { getDatabase } = await import('@/lib/db')
+        const db = await getDatabase()
+        const configs = await db.getSocketConfigs(tab.config.collectionId)
+        const serverSocket = configs.find(c => c.id === tab.socketId)
+        if (serverSocket && serverSocket.updatedAt !== tab.serverUpdatedAt) {
+          setConflictSocketConfig(serverSocket)
+          return
+        }
+      }
+
       const config: SocketConfig = { ...tab.config, updatedAt: Date.now() }
-      dbUpdateSocketConfig(tab.socketId, config).then(() => refreshSocketConfigs())
+      await dbUpdateSocketConfig(tab.socketId, config)
+      await refreshSocketConfigs()
       setSocketTabs(prev => prev.map(t =>
-        t.id === tab.id ? { ...t, config, isDirty: false } : t
+        t.id === tab.id ? { ...t, config, isDirty: false, serverUpdatedAt: config.updatedAt } : t
       ))
       return
     }
@@ -2185,6 +2265,59 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                 await updateTab(activeTab.id, { request: updated, savedRequest: updated, isDirty: false, serverUpdatedAt: updated.updatedAt })
                 await refreshRequests()
                 setConflictRequest(null)
+              }}
+            >
+              Overwrite theirs
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Socket config save conflict dialog */}
+      <Dialog open={!!conflictSocketConfig} onOpenChange={(o) => { if (!o) setConflictSocketConfig(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save conflict</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Someone else saved this socket config after you opened it. Do you want to overwrite their changes with yours, or discard yours and reload theirs?
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConflictSocketConfig(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (!activeSocketTab || !conflictSocketConfig) return
+                setSocketTabs(prev => prev.map(t =>
+                  t.id === activeSocketTab.id ? {
+                    ...t,
+                    config: conflictSocketConfig,
+                    isDirty: false,
+                    serverUpdatedAt: conflictSocketConfig.updatedAt,
+                  } : t
+                ))
+                setConflictSocketConfig(null)
+              }}
+            >
+              Discard mine
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!activeSocketTab || !conflictSocketConfig) return
+                const updated = { ...activeSocketTab.config, updatedAt: Date.now() }
+                await dbUpdateSocketConfig(activeSocketTab.socketId!, updated)
+                await refreshSocketConfigs()
+                setSocketTabs(prev => prev.map(t =>
+                  t.id === activeSocketTab.id ? {
+                    ...t,
+                    config: updated,
+                    isDirty: false,
+                    serverUpdatedAt: updated.updatedAt,
+                  } : t
+                ))
+                setConflictSocketConfig(null)
               }}
             >
               Overwrite theirs

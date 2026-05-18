@@ -58,6 +58,7 @@ export interface SocketTab {
   messages: SocketMessage[]
   isDirty: boolean
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error'
+  serverUpdatedAt?: number
 }
 
 export interface KeyValuePair {
@@ -134,6 +135,7 @@ export interface Workspace {
   ownerName: string
   ownerEmail: string
   members: WorkspaceMember[]
+  isSynced?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -291,12 +293,13 @@ export function createKeyValuePair(key = '', value = ''): KeyValuePair {
 
 export type SequenceStepStatus = 'idle' | 'running' | 'success' | 'error' | 'skipped'
 
-export type SequenceActionType = 'extract-json'
+export type SequenceActionType = 'extract-json' | 'repeat'
 
 export interface SequenceAction {
   type: SequenceActionType
-  jsonKey: string      // dot-notation path e.g. "data.access_token"
-  envVariable: string  // environment variable key to write into
+  jsonKey?: string      // extract-json: dot-notation path e.g. "data.access_token"
+  envVariable?: string  // extract-json: environment variable key to write into
+  repeatCount?: number  // repeat: number of times to repeat the previous request
 }
 
 export interface SequenceStep {
@@ -324,6 +327,7 @@ export interface SequenceStepResult {
   extractedValue?: string  // for extract-json actions
   response?: ResponseData  // full response for request steps
   subResults?: Record<string, SequenceStepResult>  // for sub-sequence steps
+  iterations?: SequenceStepResult[] // for repeat action steps
 }
 
 export interface Sequence {

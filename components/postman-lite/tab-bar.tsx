@@ -121,6 +121,32 @@ export function TabBar({
 
   return (
     <div className="flex items-center border-b border-border bg-card">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost" size="icon"
+            className="h-9 w-9 shrink-0 rounded-none border-r border-border"
+            title="New tab"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-44">
+          <DropdownMenuItem onClick={onNewTab}>
+            <KeyRound className="h-3.5 w-3.5 mr-2 shrink-0" />
+            New Request
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onNewSocketTab('ws')}>
+            <Wifi className="h-3.5 w-3.5 mr-2 shrink-0" />
+            WebSocket
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onNewSocketTab('socketio')}>
+            <Zap className="h-3.5 w-3.5 mr-2 shrink-0" />
+            Socket.IO
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       <ScrollArea className="flex-1">
         <div className="flex">
           {tabOrder.map(entry => {
@@ -214,32 +240,6 @@ export function TabBar({
         </div>
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost" size="icon"
-            className="h-9 w-9 shrink-0 rounded-none border-l border-border"
-            title="New tab"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuItem onClick={onNewTab}>
-            <KeyRound className="h-3.5 w-3.5 mr-2 shrink-0" />
-            New Request
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onNewSocketTab('ws')}>
-            <Wifi className="h-3.5 w-3.5 mr-2 shrink-0" />
-            WebSocket
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onNewSocketTab('socketio')}>
-            <Zap className="h-3.5 w-3.5 mr-2 shrink-0" />
-            Socket.IO
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   )
 }

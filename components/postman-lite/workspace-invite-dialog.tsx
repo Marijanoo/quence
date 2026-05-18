@@ -45,6 +45,9 @@ export function WorkspaceInviteDialog({ open, onOpenChange, workspace, onUpdateW
     setLoading(true)
     try {
       await invite(trimmed, permission)
+      if (!workspace.isSynced) {
+        await onUpdateWorkspace(workspace.id, { isSynced: true })
+      }
       setEmail('')
       setPermission('read')
     } catch (err) {

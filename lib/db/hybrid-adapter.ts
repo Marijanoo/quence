@@ -13,6 +13,8 @@ export class HybridAdapter implements DatabaseAdapter {
   private _rest: DatabaseAdapter | null = null
   // Cache of workspaceId → isShared so we don't re-fetch on every call
   private _sharedCache = new Map<string, boolean>()
+  // Workspaces explicitly deleted by the user — excluded from remote re-seeding
+  private _deletedWorkspaceIds = new Set<string>()
 
   async init(): Promise<void> {
     const [{ PostgresAdapter }, { RestAdapter }] = await Promise.all([
@@ -66,24 +68,25 @@ export class HybridAdapter implements DatabaseAdapter {
     // Seed SQLite with any remote workspace the user joined but doesn't have locally yet.
     // This happens when an invitee accepts an invite — the workspace lives on the server.
     for (const w of remote) {
+      if (this._deletedWorkspaceIds.has(w.id)) continue
       if (!localIds.has(w.id)) {
-        await this.sqlite.createWorkspace(w).catch(() => {})
+        await this.sqlite.createWorkspace({ ...w, isSynced: true }).catch(() => {})
       } else {
         // Keep local copy in sync with remote membership info
         const remoteMembers = w.members
         const localW = local.find(l => l.id === w.id)
-        if (localW && JSON.stringify(localW.members) !== JSON.stringify(remoteMembers)) {
-          await this.sqlite.updateWorkspace(w.id, { members: remoteMembers, name: w.name }).catch(() => {})
+        if (localW && (JSON.stringify(localW.members) !== JSON.stringify(remoteMembers) || !localW.isSynced)) {
+          await this.sqlite.updateWorkspace(w.id, { members: remoteMembers, name: w.name, isSynced: true }).catch(() => {})
         }
       }
       // Update shared cache
-      this._sharedCache.set(w.id, (w.members?.length ?? 0) > 0)
+      this._sharedCache.set(w.id, true)
     }
 
     // Merge: remote data takes precedence for shared workspaces
     const map = new Map<string, Workspace>()
-    for (const w of local)  map.set(w.id, w)
-    for (const w of remote) map.set(w.id, w)
+    for (const w of local)  if (!this._deletedWorkspaceIds.has(w.id)) map.set(w.id, w)
+    for (const w of remote) if (!this._deletedWorkspaceIds.has(w.id)) map.set(w.id, { ...w, isSynced: true })
     return [...map.values()].sort((a, b) => a.createdAt - b.createdAt)
   }
 
@@ -111,7 +114,11 @@ export class HybridAdapter implements DatabaseAdapter {
   // Push a workspace and all its data from SQLite → REST API (public so callers can trigger on first invite)
   async syncWorkspaceToRemote(workspaceId: string): Promise<void> {
     const ws = (await this.sqlite.getWorkspaces()).find(w => w.id === workspaceId)
-    if (ws) await this._syncLocalToRemote(ws)
+    if (ws) {
+      await this._syncLocalToRemote(ws)
+      await this.sqlite.updateWorkspace(workspaceId, { isSynced: true })
+      this._sharedCache.set(workspaceId, true)
+    }
   }
 
   private async _syncLocalToRemote(ws: Workspace): Promise<void> {
@@ -161,11 +168,12 @@ export class HybridAdapter implements DatabaseAdapter {
   }
 
   async deleteWorkspace(id: string): Promise<void> {
-    const adapter = await this.adapterFor(id)
-    await adapter.deleteWorkspace(id)
-    if (adapter === this.rest) {
-      await this.sqlite.deleteWorkspace(id).catch(() => {})
-    }
+    this._deletedWorkspaceIds.add(id)
+    // Delete from both adapters so a stale remote copy can't re-seed SQLite
+    await Promise.all([
+      this.sqlite.deleteWorkspace(id).catch(() => {}),
+      this.rest.deleteWorkspace(id).catch(() => {}),
+    ])
     this.invalidateWorkspace(id)
   }
 
@@ -189,12 +197,12 @@ export class HybridAdapter implements DatabaseAdapter {
     await adapter.createCollection(c)
   }
   async updateCollection(id: string, data: Partial<Collection>): Promise<void> {
-    const col = await this.sqlite.getCollection(id)
+    const col = await this.getCollection(id)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.updateCollection(id, data)
   }
   async deleteCollection(id: string): Promise<void> {
-    const col = await this.sqlite.getCollection(id)
+    const col = await this.getCollection(id)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.deleteCollection(id)
   }
@@ -202,7 +210,7 @@ export class HybridAdapter implements DatabaseAdapter {
   // ── Requests ────────────────────────────────────────────────────────────────
   async getRequests(collectionId?: string): Promise<RequestConfig[]> {
     if (!collectionId) return this.sqlite.getRequests()
-    const col = await this.sqlite.getCollection(collectionId)
+    const col = await this.getCollection(collectionId)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     return adapter.getRequests(collectionId)
   }
@@ -210,19 +218,19 @@ export class HybridAdapter implements DatabaseAdapter {
     return await this.sqlite.getRequest(id) ?? this.rest.getRequest(id)
   }
   async createRequest(r: RequestConfig): Promise<void> {
-    const col = r.collectionId ? await this.sqlite.getCollection(r.collectionId) : undefined
+    const col = r.collectionId ? await this.getCollection(r.collectionId) : undefined
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.createRequest(r)
   }
   async updateRequest(id: string, data: Partial<RequestConfig>): Promise<void> {
-    const req = await this.sqlite.getRequest(id)
-    const col = req?.collectionId ? await this.sqlite.getCollection(req.collectionId) : undefined
+    const req = await this.getRequest(id)
+    const col = req?.collectionId ? await this.getCollection(req.collectionId) : undefined
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.updateRequest(id, data)
   }
   async deleteRequest(id: string): Promise<void> {
-    const req = await this.sqlite.getRequest(id)
-    const col = req?.collectionId ? await this.sqlite.getCollection(req.collectionId) : undefined
+    const req = await this.getRequest(id)
+    const col = req?.collectionId ? await this.getCollection(req.collectionId) : undefined
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.deleteRequest(id)
   }
@@ -230,12 +238,12 @@ export class HybridAdapter implements DatabaseAdapter {
   // ── Socket configs ───────────────────────────────────────────────────────────
   async getSocketConfigs(collectionId?: string): Promise<SocketConfig[]> {
     if (!collectionId) return this.sqlite.getSocketConfigs()
-    const col = await this.sqlite.getCollection(collectionId)
+    const col = await this.getCollection(collectionId)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     return adapter.getSocketConfigs(collectionId)
   }
   async createSocketConfig(c: SocketConfig): Promise<void> {
-    const col = c.collectionId ? await this.sqlite.getCollection(c.collectionId) : undefined
+    const col = c.collectionId ? await this.getCollection(c.collectionId) : undefined
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     await adapter.createSocketConfig(c)
   }

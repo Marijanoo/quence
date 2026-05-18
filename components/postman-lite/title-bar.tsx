@@ -208,7 +208,7 @@ function MembersDropdown({ onUpdateWorkspace, hook }: { onUpdateWorkspace: (id: 
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function InviteDropdown({ hook }: { hook: WorkspaceMembersHook }) {
+function InviteDropdown({ hook, onUpdateWorkspace, activeWorkspace }: { hook: WorkspaceMembersHook, onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>, activeWorkspace: Workspace }) {
   const { invite } = hook
   const [email, setEmail] = useState('')
   const [permission, setPermission] = useState<WorkspacePermission>('read')
@@ -226,6 +226,9 @@ function InviteDropdown({ hook }: { hook: WorkspaceMembersHook }) {
     setError('')
     try {
       await invite(trimmed, permission)
+      if (!activeWorkspace.isSynced) {
+        await onUpdateWorkspace(activeWorkspace.id, { isSynced: true })
+      }
       setSent(true)
       setTimeout(() => { setSent(false); setEmail(''); setPermission('read') }, 1500)
     } catch (err) {
@@ -372,7 +375,7 @@ export function TitleBar({
         {isOwner && activeWorkspace && onUpdateWorkspace && (
           <>
             <MembersDropdown onUpdateWorkspace={onUpdateWorkspace} hook={membersHook} />
-            <InviteDropdown hook={membersHook} />
+            <InviteDropdown hook={membersHook} onUpdateWorkspace={onUpdateWorkspace} activeWorkspace={activeWorkspace} />
             <Sep />
           </>
         )}

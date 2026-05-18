@@ -94,6 +94,25 @@ export function useWorkspaceManager() {
         const ws = createNewWorkspace('My Workspace', currentUser)
         await db.createWorkspace(ws)
 
+        // Create initial collection and request
+        const collection = createNewCollection('Initial collection', ws.id)
+        await db.createCollection(collection)
+
+        const request = createNewRequest()
+        request.name = 'New Request'
+        request.collectionId = collection.id
+        await db.createRequest(request)
+
+        const newTab: WorkspaceTab = {
+          id: generateId(),
+          requestId: request.id,
+          request: request,
+          savedRequest: request,
+          response: null,
+          isDirty: false,
+        }
+        await db.saveWorkspaceState(ws.id, { tabs: [newTab], activeTabId: newTab.id })
+
         setActiveWorkspaceId(ws.id)
         localStorage.setItem(ACTIVE_WORKSPACE_KEY, ws.id)
         await refresh()
@@ -114,6 +133,25 @@ export function useWorkspaceManager() {
     if (!db) return
     const ws = createNewWorkspace(name, owner)
     await db.createWorkspace(ws)
+    
+    const collection = createNewCollection('Initial collection', ws.id)
+    await db.createCollection(collection)
+
+    const request = createNewRequest()
+    request.name = 'New Request'
+    request.collectionId = collection.id
+    await db.createRequest(request)
+
+    const newTab: WorkspaceTab = {
+      id: generateId(),
+      requestId: request.id,
+      request: request,
+      savedRequest: request,
+      response: null,
+      isDirty: false,
+    }
+    await db.saveWorkspaceState(ws.id, { tabs: [newTab], activeTabId: newTab.id })
+
     await refresh()
     setActiveWorkspaceId(ws.id)
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, ws.id)

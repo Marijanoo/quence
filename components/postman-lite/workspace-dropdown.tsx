@@ -84,7 +84,7 @@ function WorkspaceActions({
   }
 
   return (
-    <div ref={ref} className="relative shrink-0" onClick={e => e.stopPropagation()}>
+    <div ref={ref} className="relative shrink-0" data-ws-actions onClick={e => e.stopPropagation()}>
       <button
         onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
         className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -202,11 +202,18 @@ export function WorkspaceDropdown({
           {/* Workspace list */}
           {workspaces.map(ws => {
             const owned = isOwner(ws)
-            const isCloud = (ws.members?.length ?? 0) > 0
+            const isCloud = ws.isSynced || (ws.members?.length ?? 0) > 0
             return (
               <DropdownMenuItem
                 key={ws.id}
-                onSelect={() => onSelect(ws.id)}
+                onSelect={(e) => {
+                  // Don't select/close if the click originated inside the actions popover
+                  if ((e.target as HTMLElement).closest('[data-ws-actions]')) {
+                    e.preventDefault()
+                    return
+                  }
+                  onSelect(ws.id)
+                }}
                 className="flex items-center gap-2 group pr-1"
                 onContextMenu={e => handleContextMenu(e, ws)}
               >

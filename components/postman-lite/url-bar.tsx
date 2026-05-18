@@ -52,13 +52,17 @@ export function UrlBar({
 }: UrlBarProps) {
   const { variables, updateVariable } = useEnvironmentContext()
   const [copied, setCopied] = useState(false)
+  const [pasteCount, setPasteCount] = useState(0)
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData('text')
     if (!isCurlCommand(text)) return
     e.preventDefault()
     const parsed = parseCurl(text)
-    if (parsed) onCurlImport(parsed)
+    if (parsed) {
+      onCurlImport(parsed)
+      setPasteCount(c => c + 1)
+    }
   }
 
   const handleCopyCurl = async () => {
@@ -107,7 +111,7 @@ export function UrlBar({
       <div className="flex-1">
         <VariableHighlightInput
           value={url}
-          resetKey={request.id}
+          resetKey={`${request.id}-paste-${pasteCount}`}
           onChange={readOnly ? () => {} : onUrlChange}
           onPaste={readOnly ? undefined : handlePaste}
           onEnter={readOnly ? undefined : (currentValue) => onSend(currentValue)}
