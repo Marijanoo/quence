@@ -76,52 +76,55 @@ export function EnvironmentsPanel({
   }
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) return
 
-    const reader = new FileReader()
-    reader.onload = async (event) => {
-      try {
-        const content = JSON.parse(event.target?.result as string)
-        let name = file.name.replace('.json', '')
-        let variables: EnvironmentVariable[] = []
+    for (const file of files) {
+      await new Promise<void>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          try {
+            const content = JSON.parse(event.target?.result as string)
+            let name = file.name.replace(/\.json$/i, '')
+            let variables: EnvironmentVariable[] = []
 
-        // Handle Postman Environment export format
-        if (content.name && Array.isArray(content.values)) {
-          name = content.name
-          variables = content.values.map((v: any) => ({
-            id: generateId(),
-            key: v.key || '',
-            value: v.value || '',
-            enabled: v.enabled !== false,
-          }))
-        } 
-        // Handle simple key-value object
-        else if (typeof content === 'object' && !Array.isArray(content)) {
-          variables = Object.entries(content).map(([key, value]) => ({
-            id: generateId(),
-            key,
-            value: String(value),
-            enabled: true,
-          }))
+            if (content.name && Array.isArray(content.values)) {
+              name = content.name
+              variables = content.values.map((v: any) => ({
+                id: generateId(),
+                key: v.key || '',
+                value: v.value || '',
+                enabled: v.enabled !== false,
+              }))
+            } else if (typeof content === 'object' && !Array.isArray(content)) {
+              variables = Object.entries(content).map(([key, value]) => ({
+                id: generateId(),
+                key,
+                value: String(value),
+                enabled: true,
+              }))
+            }
+
+            if (variables.length > 0) {
+              onImportEnvironment({
+                id: generateId(),
+                name,
+                variables,
+                isActive: false,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              })
+            }
+          } catch {
+            console.error('Failed to import environment:', file.name)
+          }
+          resolve()
         }
-
-        if (variables.length > 0) {
-          onImportEnvironment({
-            id: generateId(),
-            name,
-            variables,
-            isActive: false,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          })
-        }
-      } catch (error) {
-        console.error('Failed to import environment:', error)
-      }
+        reader.readAsText(file)
+      })
     }
-    reader.readAsText(file)
-    e.target.value = '' // Reset input
+
+    e.target.value = ''
   }
 
   const handleCreate = () => {
@@ -185,6 +188,7 @@ export function EnvironmentsPanel({
               ref={fileInputRef}
               className="hidden"
               accept=".json"
+              multiple
               onChange={handleImport}
             />
             <Button
