@@ -319,6 +319,22 @@ export function CollectionsPanel({
     URL.revokeObjectURL(url)
   }, [requests])
 
+  const handleExportAllCollections = useCallback(() => {
+    if (collections.length === 0) return
+    const payload = collections.map(collection => {
+      const collRequests = requests.filter(r => r.collectionId === collection.id)
+      const collSockets = socketConfigs.filter(s => s.collectionId === collection.id)
+      return { collection, requests: collRequests, socketConfigs: collSockets }
+    })
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `all_collections_export.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [collections, requests, socketConfigs])
+
   // Parse Postman collection format
   const parsePostmanCollection = (data: unknown): { collection: Collection; requests: RequestConfig[]; socketConfigs: SocketConfig[] } | null => {
     try {
@@ -522,6 +538,15 @@ export function CollectionsPanel({
           onImportCollection(data.collection, data.requests, data.socketConfigs)
           continue
         }
+        // Native export all collections format (Array of collections)
+        if (Array.isArray(data) && data[0]?.collection && Array.isArray(data[0]?.requests)) {
+          for (const item of data) {
+            if (item.collection && Array.isArray(item.requests)) {
+               onImportCollection(item.collection, item.requests, item.socketConfigs)
+            }
+          }
+          continue
+        }
         // Postman v2.1 format
         const result = parsePostmanCollection(data)
         if (result) {
@@ -549,6 +574,15 @@ export function CollectionsPanel({
         <h3 className="text-sm font-medium text-foreground">Collections</h3>
         {canWrite && (
           <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={handleExportAllCollections}
+              title="Export All Collections"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

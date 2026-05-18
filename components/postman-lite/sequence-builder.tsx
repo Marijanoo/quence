@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ResponseViewer } from './response-viewer'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
-import { Play, Plus, Trash2, GripVertical, X, FileJson, Square, Zap, ChevronRight, MoreHorizontal, Pencil, ListOrdered, ArrowLeft } from 'lucide-react'
+import { Play, Plus, Trash2, GripVertical, X, FileJson, Square, Zap, ChevronRight, MoreHorizontal, Pencil, ListOrdered, ArrowLeft, Repeat2 } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { VariableHighlightInput } from './variable-highlight-input'
@@ -184,7 +184,7 @@ export function SequenceBuilder({
     const step: SequenceStep = {
       id: generateId(),
       type: 'action',
-      name: 'Extract JSON',
+      name: action.type === 'repeat' ? 'Repeat Request' : 'Extract JSON',
       action,
       order: activeSequence.steps.length,
     }
@@ -247,7 +247,7 @@ export function SequenceBuilder({
         const action: SequenceAction = JSON.parse(rawAction)
         if (!activeSequence) return
         const step: SequenceStep = {
-          id: generateId(), type: 'action', name: 'Extract JSON', action, order: targetIdx,
+          id: generateId(), type: 'action', name: action.type === 'repeat' ? 'Repeat Request' : 'Extract JSON', action, order: targetIdx,
         }
         const steps = [...activeSequence.steps]
         steps.splice(targetIdx, 0, step)
@@ -403,7 +403,7 @@ export function SequenceBuilder({
           <div className="px-3 py-2 border-b border-border">
             <span className="text-xs font-medium text-foreground">Actions</span>
           </div>
-          <div className="p-2">
+          <div className="p-2 flex flex-col gap-1.5">
             <div
               className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border bg-card hover:bg-secondary/50 cursor-grab active:cursor-grabbing transition-colors"
               draggable
@@ -415,6 +415,18 @@ export function SequenceBuilder({
             >
               <Zap className="h-3 w-3 text-[oklch(0.75_0.18_80)] shrink-0" />
               <span className="text-xs text-foreground">Extract JSON</span>
+            </div>
+            <div
+              className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border bg-card hover:bg-secondary/50 cursor-grab active:cursor-grabbing transition-colors"
+              draggable
+              onDragStart={e => {
+                const action: SequenceAction = { type: 'repeat', repeatCount: 3 }
+                e.dataTransfer.setData('application/sequence-action', JSON.stringify(action))
+                e.dataTransfer.effectAllowed = 'copy'
+              }}
+            >
+              <Repeat2 className="h-3 w-3 text-[oklch(0.72_0.17_200)] shrink-0" />
+              <span className="text-xs text-foreground">Repeat Request</span>
             </div>
           </div>
         </div>
@@ -524,8 +536,8 @@ export function SequenceBuilder({
                         onDragEnd={() => { setDragStepIdx(null); setDragOverIdx(null) }}
                         onClick={() => setSelectedStepId(isSelected ? null : step.id)}
                       >
-                        {isAction ? (
-                          /* Action step */
+                        {isAction && step.action?.type === 'extract-json' ? (
+                          /* Extract JSON action step */
                           <div className="flex flex-col gap-1.5 px-3 py-2">
                             <div className="flex items-center gap-2">
                               <span className="cursor-grab text-muted-foreground opacity-0 group-hover:opacity-50 shrink-0">
@@ -571,6 +583,44 @@ export function SequenceBuilder({
                                     bare
                                   />
                                 </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : isAction && step.action?.type === 'repeat' ? (
+                          /* Repeat Request action step */
+                          <div className="flex flex-col gap-1.5 px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="cursor-grab text-muted-foreground opacity-0 group-hover:opacity-50 shrink-0">
+                                <GripVertical className="h-3.5 w-3.5" />
+                              </span>
+                              <span className="text-xs text-muted-foreground w-4 shrink-0 text-right">{idx + 1}</span>
+                              <Repeat2 className="h-3 w-3 text-[oklch(0.72_0.17_200)] shrink-0" />
+                              <span className="flex-1 text-xs font-medium text-[oklch(0.72_0.17_200)]">Repeat Request</span>
+                              {result && result.status !== 'idle' && result.status !== 'running' && result.iterations && (
+                                <span className="text-[10px] text-muted-foreground shrink-0">
+                                  {result.iterations.filter(i => i.status === 'success').length}/{result.iterations.length}
+                                </span>
+                              )}
+                              <StatusBadge result={result} />
+                              <Button
+                                variant="ghost" size="icon"
+                                className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                                onClick={e => { e.stopPropagation(); removeStep(step.id) }}
+                              >
+                                <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-1.5 pl-9">
+                              <span className="text-[10px] text-muted-foreground w-16 shrink-0">Count</span>
+                              <div className="flex-1" onClick={e => e.stopPropagation()}>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={100}
+                                  value={step.action?.repeatCount ?? 3}
+                                  onChange={e => updateActionStep(step.id, { repeatCount: Math.max(1, Math.min(100, parseInt(e.target.value) || 1)) })}
+                                  className="h-6 text-[11px] w-20"
+                                />
                               </div>
                             </div>
                           </div>
@@ -879,7 +929,12 @@ function StepDetail({ step, result, sequences }: { step: SequenceStep | null; re
     )
   }
 
-  // Action step
+  // Action step — branch on type
+  if (step.action?.type === 'repeat') {
+    return <RepeatDetail step={step} result={result} />
+  }
+
+  // Extract JSON action step
   const { action } = step
   const statusColor = !result || result.status === 'idle' ? 'text-muted-foreground'
     : result.status === 'running' ? 'text-[oklch(0.75_0.18_80)]'
@@ -938,6 +993,85 @@ function StepDetail({ step, result, sequences }: { step: SequenceStep | null; re
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RepeatDetail({ step, result }: { step: SequenceStep; result?: SequenceStepResult }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const iterations = result?.iterations ?? []
+  const successCount = iterations.filter(i => i.status === 'success').length
+  const totalDuration = iterations.reduce((sum, i) => sum + (i.duration ?? 0), 0)
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+        <Repeat2 className="h-4 w-4 text-[oklch(0.72_0.17_200)] shrink-0" />
+        <span className="text-sm font-medium flex-1">Repeat Request</span>
+        <span className="text-xs text-muted-foreground">{step.action?.repeatCount ?? 0}×</span>
+      </div>
+
+      {/* Summary */}
+      {result && result.status !== 'idle' && (
+        <div className="flex items-center gap-4 px-4 py-2 border-b border-border shrink-0 text-xs text-muted-foreground">
+          <span>
+            <span className="font-semibold text-foreground">{successCount}</span>/{iterations.length} passed
+          </span>
+          {totalDuration > 0 && <span>{totalDuration}ms total</span>}
+          {result.status === 'running' && <span className="text-[oklch(0.75_0.18_80)] animate-pulse">Running…</span>}
+        </div>
+      )}
+
+      {/* Iteration list */}
+      <div className="flex-1 overflow-auto">
+        {iterations.length === 0 && (!result || result.status === 'idle') ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground h-full gap-2 p-4">
+            <Repeat2 className="h-6 w-6 opacity-20" />
+            <p className="text-sm">Run the sequence to see iteration results</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {iterations.map((iter, idx) => {
+              const isOpen = expandedIdx === idx
+              const iterColor = iter.status === 'success' ? 'text-[oklch(0.72_0.19_160)]'
+                : iter.status === 'error' ? 'text-[oklch(0.65_0.22_25)]'
+                : iter.status === 'running' ? 'text-[oklch(0.75_0.18_80)]'
+                : 'text-muted-foreground'
+              return (
+                <div key={idx}>
+                  <button
+                    className="w-full flex items-center gap-3 px-4 py-2 hover:bg-secondary/30 transition-colors text-left"
+                    onClick={() => setExpandedIdx(isOpen ? null : idx)}
+                  >
+                    <ChevronRight className={cn('h-3 w-3 transition-transform shrink-0', isOpen && 'rotate-90')} />
+                    <span className="text-xs font-medium text-foreground">Iteration {idx + 1}</span>
+                    {iter.statusCode !== undefined && (
+                      <span className={cn('font-mono text-[10px] font-semibold', iterColor)}>{iter.statusCode}</span>
+                    )}
+                    {iter.duration !== undefined && (
+                      <span className="text-[10px] text-muted-foreground">{iter.duration}ms</span>
+                    )}
+                    {iter.error && !iter.statusCode && (
+                      <span className="text-[10px] text-[oklch(0.65_0.22_25)] truncate flex-1">{iter.error}</span>
+                    )}
+                    <span className={cn('text-[10px] font-semibold capitalize ml-auto', iterColor)}>{iter.status}</span>
+                  </button>
+                  {isOpen && iter.response && (
+                    <div className="h-64 border-t border-border">
+                      <ResponseViewer response={iter.response} isLoading={false} />
+                    </div>
+                  )}
+                  {isOpen && iter.error && !iter.response && (
+                    <div className="px-4 py-3 border-t border-border">
+                      <p className="text-xs text-[oklch(0.65_0.22_25)]">{iter.error}</p>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

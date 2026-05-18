@@ -55,6 +55,9 @@ export function WorkspaceQuickInviteDialog({ open, onOpenChange, workspace, onUp
     setLoading(true)
     try {
       await invite(trimmed, permission)
+      if (!workspace.isSynced) {
+        await onUpdateWorkspace(workspace.id, { isSynced: true })
+      }
       setSent(true)
       setTimeout(() => onOpenChange(false), 800)
     } catch (err) {

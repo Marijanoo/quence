@@ -33,6 +33,7 @@ import {
   Trash2,
   Check,
   FileUp,
+  Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -87,6 +88,28 @@ export function EnvironmentsPanel({
             const content = JSON.parse(event.target?.result as string)
             let name = file.name.replace(/\.json$/i, '')
             let variables: EnvironmentVariable[] = []
+
+            if (Array.isArray(content)) {
+              content.forEach((env: any) => {
+                if (env.name && Array.isArray(env.values)) {
+                  onImportEnvironment({
+                    id: generateId(),
+                    name: env.name,
+                    variables: env.values.map((v: any) => ({
+                      id: generateId(),
+                      key: v.key || '',
+                      value: v.value || '',
+                      enabled: v.enabled !== false,
+                    })),
+                    isActive: false,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                  })
+                }
+              })
+              resolve()
+              return
+            }
 
             if (content.name && Array.isArray(content.values)) {
               name = content.name
@@ -144,6 +167,39 @@ export function EnvironmentsPanel({
     }
   }
 
+  const handleExport = (env: Environment) => {
+    const data = {
+      name: env.name,
+      values: env.variables.map(v => ({ key: v.key, value: v.value, enabled: v.enabled }))
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${env.name.replace(/\s+/g, '-').toLowerCase()}-environment.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleExportAllEnvironments = () => {
+    if (environments.length === 0) return
+    const data = environments.map(env => ({
+      name: env.name,
+      values: env.variables.map(v => ({ key: v.key, value: v.value, enabled: v.enabled }))
+    }))
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `all_environments_export.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   const openRenameDialog = (env: Environment) => {
     setSelectedEnv(env)
     setInputValue(env.name)
@@ -191,6 +247,15 @@ export function EnvironmentsPanel({
               multiple
               onChange={handleImport}
             />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={handleExportAllEnvironments}
+              title="Export all environments"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -268,6 +333,10 @@ export function EnvironmentsPanel({
                             Rename
                           </DropdownMenuItem>
                         )}
+                        <DropdownMenuItem onClick={() => handleExport(env)}>
+                          <Download className="h-4 w-4 mr-2" />
+                          Export
+                        </DropdownMenuItem>
                         {canWrite && (
                           <DropdownMenuItem
                             onClick={() => onDeleteEnvironment(env.id)}

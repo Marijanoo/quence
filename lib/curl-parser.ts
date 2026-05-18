@@ -231,7 +231,7 @@ export function parseCurl(input: string): Partial<RequestConfig> | null {
           bodyContent = JSON.stringify(JSON.parse(trimmed), null, 2)
         } catch { /* keep as-is */ }
       } else {
-        bodyType = 'raw'
+        bodyType = 'x-www-form-urlencoded'
       }
     }
   }
