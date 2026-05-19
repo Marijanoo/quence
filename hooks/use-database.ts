@@ -536,7 +536,7 @@ export function useWorkspace(workspaceId?: string | null) {
         const hydratedTabs = await Promise.all(
           saved.tabs.map(async (tab) => {
             if (!tab.requestId) return tab
-            const fresh = await db.getRequest(tab.requestId)
+            const fresh = await db.getRequest(tab.requestId).catch(() => undefined)
             if (!fresh) return tab
             // If the tab had unsaved local edits, restore them with the fresh DB version as savedRequest
             if (tab.isDirty && tab.request && tab.request.id) {
