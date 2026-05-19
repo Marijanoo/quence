@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { WorkspaceTab, SocketTab, HttpMethod, SocketProtocol } from '@/lib/db/types'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -10,8 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { X, Plus, Circle, KeyRound, Wifi, Zap } from 'lucide-react'
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
+import { X, Plus, Circle, KeyRound, Wifi, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export type TabOrderEntry = { id: string; kind: 'http' | 'socket' }
 
@@ -55,6 +54,8 @@ const protocolLabel: Record<SocketProtocol, string> = {
   socketio: 'SIO',
 }
 
+const TAB_WIDTH = 170
+
 export function TabBar({
   tabs,
   socketTabs,
@@ -71,6 +72,46 @@ export function TabBar({
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const [flashingId, setFlashingId] = useState<string | null>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const updateScrollState = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setCanScrollLeft(el.scrollLeft > 0)
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    updateScrollState()
+    el.addEventListener('scroll', updateScrollState)
+    const ro = new ResizeObserver(updateScrollState)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', updateScrollState); ro.disconnect() }
+  }, [updateScrollState, tabOrder.length])
+
+  // Scroll active tab into view whenever activeTabId changes or a new tab is added
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !activeTabId) return
+    const activeEl = el.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null
+    if (!activeEl) return
+    const { offsetLeft, offsetWidth } = activeEl
+    if (offsetLeft < el.scrollLeft) {
+      el.scrollTo({ left: offsetLeft, behavior: 'smooth' })
+    } else if (offsetLeft + offsetWidth > el.scrollLeft + el.clientWidth) {
+      el.scrollTo({ left: offsetLeft + offsetWidth - el.clientWidth, behavior: 'smooth' })
+    }
+  }, [activeTabId, tabOrder.length])
+
+  const scrollTabs = useCallback((direction: 'left' | 'right') => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollBy({ left: direction === 'left' ? -(TAB_WIDTH * 3) : TAB_WIDTH * 3, behavior: 'smooth' })
+  }, [])
 
   useEffect(() => {
     if (!flashTabId) return
@@ -147,7 +188,16 @@ export function TabBar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <ScrollArea className="flex-1">
+      {canScrollLeft && (
+        <button
+          onClick={() => scrollTabs('left')}
+          className="shrink-0 h-9 w-6 flex items-center justify-center border-r border-border bg-card hover:bg-secondary/50 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+      )}
+
+      <div ref={scrollRef} className="flex-1 overflow-x-auto scrollbar-none">
         <div className="flex">
           {tabOrder.map(entry => {
             const isActive = entry.id === activeTabId
@@ -163,6 +213,7 @@ export function TabBar({
               return (
                 <div
                   key={tab.id}
+                  data-tab-id={tab.id}
                   draggable
                   onDragStart={(e) => handleDragStart(e, tab.id)}
                   onDragOver={(e) => handleDragOver(e, tab.id)}
@@ -201,6 +252,7 @@ export function TabBar({
               return (
                 <div
                   key={tab.id}
+                  data-tab-id={tab.id}
                   draggable
                   onDragStart={(e) => handleDragStart(e, tab.id)}
                   onDragOver={(e) => handleDragOver(e, tab.id)}
@@ -238,8 +290,16 @@ export function TabBar({
             }
           })}
         </div>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
+      </div>
+
+      {canScrollRight && (
+        <button
+          onClick={() => scrollTabs('right')}
+          className="shrink-0 h-9 w-6 flex items-center justify-center border-l border-border bg-card hover:bg-secondary/50 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      )}
     </div>
   )
 }

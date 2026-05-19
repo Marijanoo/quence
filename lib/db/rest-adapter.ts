@@ -80,7 +80,7 @@ export class RestAdapter implements DatabaseAdapter {
     return get(`/requests${qs}`)
   }
   async getRequest(id: string): Promise<RequestConfig | undefined> {
-    return get(`/requests/${id}`)
+    return get<RequestConfig>(`/requests/${id}`).catch(() => undefined)
   }
   async createRequest(r: RequestConfig): Promise<void> {
     await post(`/requests`, r)
