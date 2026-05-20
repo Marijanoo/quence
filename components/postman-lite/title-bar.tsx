@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
-import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save, Trash2, Eye, Shield, Loader2 } from 'lucide-react'
+import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save, Trash2, Eye, Shield, Loader2, TerminalSquare } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,8 +23,8 @@ import { useMyInvites, useWorkspaceMembers } from '@/hooks/use-collaboration'
 import type { Workspace, WorkspacePermission } from '@/lib/db/types'
 
 interface TitleBarProps {
-  appMode?: 'api' | 'database'
-  onSwitchMode?: (mode: 'api' | 'database') => void
+  appMode?: 'api' | 'database' | 'terminal'
+  onSwitchMode?: (mode: 'api' | 'database' | 'terminal') => void
   workspaceDropdown?: React.ReactNode
   environments?: React.ReactNode
   activeWorkspace?: Workspace | null
@@ -350,9 +350,23 @@ export function TitleBar({
         <Image src="/logo.png" alt="Quence" width={14} height={14} className="shrink-0" />
         {appMode === 'api'
           ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-foreground">API</span></>
-          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-blue-400">DB</span></>
+          : appMode === 'database'
+          ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-blue-400">DB</span></>
+          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-green-400">Terminal</span></>
         }
       </button>
+
+      <Sep />
+
+      {/* Terminal toggle */}
+      <TitleBtn
+        onClick={() => onSwitchMode?.(appMode === 'terminal' ? 'api' : 'terminal')}
+        title="Terminal"
+        className={appMode === 'terminal' ? 'text-green-400' : ''}
+      >
+        <TerminalSquare className="h-3.5 w-3.5" />
+        Terminal
+      </TitleBtn>
 
       <Sep />
 

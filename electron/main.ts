@@ -1,7 +1,9 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { Pool } from 'pg'
 import * as path from 'path'
 import * as fs from 'fs'
+import { spawn, ChildProcess } from 'child_process'
+import * as os from 'os'
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
@@ -490,17 +492,134 @@ app.on('ready', () => {
     }
   })
 
+  // ── File picker for .ovpn files ─────────────────────────────────────────────
+  ipcMain.handle('pg:select-ovpn-file', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Select OpenVPN Config',
+      filters: [{ name: 'OpenVPN Config', extensions: ['ovpn'] }, { name: 'All Files', extensions: ['*'] }],
+      properties: ['openFile'],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
   // ── Postgres connections ────────────────────────────────────────────────────
   const pgPools = new Map<string, Pool>()
+  const vpnProcesses = new Map<string, ChildProcess>()
 
-  ipcMain.handle('pg:connect', async (_e, { id, host, port, database, user, password, ssl }: {
-    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean
+  function spawnVpn(id: string, configPath: string, username?: string, password?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Use a safe temp filename in the system temp dir (no spaces, no special chars)
+      const safeId = id.replace(/[^a-zA-Z0-9]/g, '')
+      const tmpDir = os.tmpdir()
+      const tmpConfig = path.join(tmpDir, `ovpn-${safeId}.ovpn`)
+      const original = fs.readFileSync(configPath, 'utf-8')
+      fs.writeFileSync(tmpConfig, original)
+
+      const args = ['--config', tmpConfig]
+
+      // Write credentials to a temp file if provided, then pass via --auth-user-pass.
+      // This avoids credentials appearing in process arguments.
+      let tmpAuth: string | null = null
+      if (username || password) {
+        tmpAuth = path.join(tmpDir, `ovpn-auth-${safeId}.txt`)
+        fs.writeFileSync(tmpAuth, `${username ?? ''}\n${password ?? ''}\n`, { mode: 0o600 })
+        args.push('--auth-user-pass', tmpAuth)
+      }
+
+      // Resolve openvpn binary: try PATH first, fall back to the default Windows install location
+      const openvpnBin = process.platform === 'win32'
+        ? 'C:\\Program Files\\OpenVPN\\bin\\openvpn.exe'
+        : 'openvpn'
+      const proc = spawn(openvpnBin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      vpnProcesses.set(id, proc)
+
+      let settled = false
+      let outputLog = ''
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          reject(new Error(`OpenVPN timed out (30s).\n\nOutput:\n${outputLog || '(none)'}`))
+        }
+      }, 30000)
+
+      const onData = (chunk: Buffer) => {
+        const text = chunk.toString()
+        outputLog += text
+        console.log('[openvpn]', text.trimEnd())
+        if (!settled) {
+          if (text.includes('Initialization Sequence Completed')) {
+            settled = true
+            clearTimeout(timeout)
+            console.log('[openvpn] connected. Full output:\n', outputLog)
+            resolve()
+          } else if (text.includes('AUTH_FAILED')) {
+            settled = true
+            clearTimeout(timeout)
+            reject(new Error('OpenVPN authentication failed. Check your VPN username and password.'))
+          } else if (text.includes('TLS handshake failed') || text.includes('TLS Error')) {
+            settled = true
+            clearTimeout(timeout)
+            reject(new Error(`OpenVPN TLS error.\n\nOutput:\n${outputLog}`))
+          } else if (text.includes('Connection refused') || text.includes('ECONNREFUSED')) {
+            settled = true
+            clearTimeout(timeout)
+            reject(new Error(`OpenVPN server refused connection.\n\nOutput:\n${outputLog}`))
+          }
+        }
+      }
+
+      proc.stdout?.on('data', onData)
+      proc.stderr?.on('data', onData)
+
+      const cleanup = () => {
+        try { fs.unlinkSync(tmpConfig) } catch {}
+        if (tmpAuth) try { fs.unlinkSync(tmpAuth) } catch {}
+      }
+
+      proc.on('error', (err) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          cleanup()
+          vpnProcesses.delete(id)
+          reject(new Error(`Failed to start OpenVPN: ${err.message} (code: ${(err as any).code}). Make sure openvpn.exe is installed and in your PATH.`))
+        }
+      })
+
+      proc.on('exit', (code) => {
+        cleanup()
+        vpnProcesses.delete(id)
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          reject(new Error(`OpenVPN exited with code ${code}.\n\nOutput:\n${outputLog || '(none)'}`))
+        }
+      })
+    })
+  }
+
+  function killVpn(id: string) {
+    const proc = vpnProcesses.get(id)
+    if (!proc) return
+    try { proc.kill() } catch {}
+    vpnProcesses.delete(id)
+  }
+
+  ipcMain.handle('pg:connect', async (_e, { id, host, port, database, user, password, ssl, vpnConfigPath, vpnUsername, vpnPassword }: {
+    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string
   }) => {
     try {
       if (pgPools.has(id)) {
         await pgPools.get(id)!.end()
         pgPools.delete(id)
       }
+      killVpn(id)
+
+      if (vpnConfigPath) {
+        await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
+      }
+
       const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 15000 })
       // Test the connection immediately
       const client = await pool.connect()
@@ -508,6 +627,7 @@ app.on('ready', () => {
       pgPools.set(id, pool)
       return { ok: true }
     } catch (err) {
+      killVpn(id)
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
@@ -516,6 +636,7 @@ app.on('ready', () => {
     try {
       await pgPools.get(id)?.end()
       pgPools.delete(id)
+      killVpn(id)
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -601,6 +722,94 @@ app.on('ready', () => {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     } finally {
       await dbPool.end()
+    }
+  })
+
+  // ── Terminal ────────────────────────────────────────────────────────────────
+  // Map of terminal id → active shell process
+  const termProcesses = new Map<string, any>()
+
+  ipcMain.handle('pty:create', (_e, { id }: { id: string }) => {
+    const send = (data: string) => mainWindow?.webContents.send(`pty:data:${id}`, data)
+    const cwd = os.homedir()
+
+    const isWin = process.platform === 'win32'
+    const shell = isWin ? 'cmd.exe' : (process.env.SHELL ?? 'bash')
+    const args = isWin ? ['/Q'] : ['-i']
+
+    try {
+      const proc = spawn(shell, args, {
+        cwd,
+        env: { ...process.env, TERM: 'xterm-256color' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }) as any
+
+      termProcesses.set(id, proc)
+
+      proc.stdout?.on('data', (d: Buffer) => {
+        send(d.toString())
+      })
+
+      proc.stderr?.on('data', (d: Buffer) => {
+        send(d.toString())
+      })
+
+      proc.on('exit', () => {
+        mainWindow?.webContents.send(`pty:exit:${id}`)
+        termProcesses.delete(id)
+      })
+
+      proc.on('error', (err: any) => {
+        send(`\r\nFailed to start terminal: ${err.message}\r\n`)
+      })
+    } catch (e: any) {
+      return { ok: false, error: e.message }
+    }
+
+    return { ok: true }
+  })
+
+  ipcMain.on('pty:ready', () => { /* no-op in persistent shell mode */ })
+
+  ipcMain.on('pty:line', (_e, { id, line }: { id: string; line: string }) => {
+    const proc = termProcesses.get(id)
+    if (proc) {
+      proc.stdin?.write(line + '\n')
+    }
+  })
+
+  ipcMain.handle('pty:kill', (_e, { id }: { id: string }) => {
+    const proc = termProcesses.get(id)
+    if (proc) {
+      try {
+        proc.kill()
+      } catch (err) {}
+      termProcesses.delete(id)
+    }
+    return { ok: true }
+  })
+
+  ipcMain.on('pty:write', (_e, { id, data }: { id: string; data: string }) => {
+    const proc = termProcesses.get(id)
+    if (proc) {
+      proc.stdin?.write(data)
+    }
+  })
+
+  ipcMain.on('pty:resize', () => { /* no-op without PTY */ })
+
+  ipcMain.handle('pty:homedir', () => os.homedir())
+
+  app.on('will-quit', () => {
+    for (const [id, proc] of termProcesses) {
+      try {
+        proc.kill()
+      } catch (err) {}
+    }
+    termProcesses.clear()
+
+    for (const [id] of vpnProcesses) {
+      killVpn(id)
     }
   })
 })

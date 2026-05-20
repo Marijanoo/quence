@@ -7,7 +7,8 @@
       "Bash(npx tsc *)",
       "Bash(Select-Object Name, FullName)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Marijan Kolaj\\\\Desktop\\\\postman-lite\" -Force)",
-      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\Marijan Kolaj\\\\Desktop\\\\postman-lite\" -Force | Select-Object Name, @{Name=\"Type\"; Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}} | Format-Table -AutoSize)"
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\Marijan Kolaj\\\\Desktop\\\\postman-lite\" -Force | Select-Object Name, @{Name=\"Type\"; Expression={if\\($_.PSIsContainer\\){\"Directory\"}else{\"File\"}}} | Format-Table -AutoSize)",
+      "Bash(npm install *)"
     ]
   }
 }

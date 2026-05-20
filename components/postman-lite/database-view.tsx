@@ -9,7 +9,7 @@ import {
 import {
   Database, Table2, FunctionSquare, ChevronRight, ChevronDown,
   Plus, Play, PlugZap, FileCode2, RefreshCw, X, FileText, Loader2, View, Pencil, Save, FileCode, Search, Plug,
-  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight,
+  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight, Shield,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { generateId } from '@/lib/utils'
@@ -33,6 +33,9 @@ interface DbConnection {
   user: string
   password: string
   ssl: boolean
+  vpnConfigPath?: string
+  vpnUsername?: string
+  vpnPassword?: string
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   errorMsg?: string
   databases: DbDatabase[]
@@ -298,6 +301,10 @@ interface NewConnectionDialogProps {
   onClose: () => void
 }
 
+function vpnFileName(p: string) {
+  return p.split(/[\\/]/).pop() ?? p
+}
+
 function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
   const [label, setLabel] = useState('')
   const [host, setHost] = useState('localhost')
@@ -306,6 +313,9 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
   const [user, setUser] = useState('')
   const [password, setPassword] = useState('')
   const [ssl, setSsl] = useState(false)
+  const [vpnConfigPath, setVpnConfigPath] = useState('')
+  const [vpnUsername, setVpnUsername] = useState('')
+  const [vpnPassword, setVpnPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
@@ -317,7 +327,7 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
     setTesting(true)
     setTestResult(null)
     const tempId = `test-${Date.now()}`
-    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl })
+    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
     await window.electronAPI!.pg.disconnect(tempId)
     setTestResult(res.ok ? { ok: true, msg: 'Connection successful' } : { ok: false, msg: res.error ?? 'Failed' })
     setTesting(false)
@@ -328,7 +338,7 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
     setError('')
     setLoading(true)
     try {
-      await onConnect({ label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl })
+      await onConnect({ label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -421,9 +431,69 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
             <span className="text-xs text-muted-foreground select-none cursor-pointer" onClick={() => setSsl(!ssl)}>SSL Connection</span>
           </div>
 
-          {error && <p className="text-xs text-destructive">{error}</p>}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground flex items-center gap-1">
+              <Shield className="h-3 w-3" /> OpenVPN Config <span className="text-muted-foreground/50">(optional)</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-background border border-border rounded px-2 py-1.5 text-xs text-muted-foreground truncate">
+                {vpnConfigPath ? vpnFileName(vpnConfigPath) : 'No .ovpn file selected'}
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const p = await window.electronAPI!.pg.selectOvpnFile()
+                  if (p) setVpnConfigPath(p)
+                }}
+                className="px-2.5 py-1.5 rounded text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors shrink-0"
+              >
+                Browse
+              </button>
+              {vpnConfigPath && (
+                <button type="button" onClick={() => { setVpnConfigPath(''); setVpnUsername(''); setVpnPassword('') }} className="text-muted-foreground hover:text-foreground transition-colors">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {vpnConfigPath && (
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">VPN Username <span className="text-muted-foreground/50">(if required)</span></label>
+                  <input
+                    value={vpnUsername} onChange={e => setVpnUsername(e.target.value)}
+                    placeholder="username"
+                    className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">VPN Password <span className="text-muted-foreground/50">(if required)</span></label>
+                  <input
+                    type="password"
+                    value={vpnPassword} onChange={e => setVpnPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+              <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+              <p className="text-xs text-destructive whitespace-pre-wrap break-words">{error}</p>
+            </div>
+          )}
           {testResult && (
-            <p className={`text-xs ${testResult.ok ? 'text-green-500' : 'text-destructive'}`}>{testResult.msg}</p>
+            testResult.ok
+              ? <div className="flex items-center gap-2 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2">
+                  <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                  <p className="text-xs text-green-500">{testResult.msg}</p>
+                </div>
+              : <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                  <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+                  <p className="text-xs text-destructive whitespace-pre-wrap break-words">{testResult.msg}</p>
+                </div>
           )}
 
           <div className="flex items-center gap-2 pt-1">
@@ -473,6 +543,9 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
   const [user, setUser] = useState(conn.user)
   const [password, setPassword] = useState(conn.password)
   const [ssl, setSsl] = useState(conn.ssl)
+  const [vpnConfigPath, setVpnConfigPath] = useState(conn.vpnConfigPath ?? '')
+  const [vpnUsername, setVpnUsername] = useState(conn.vpnUsername ?? '')
+  const [vpnPassword, setVpnPassword] = useState(conn.vpnPassword ?? '')
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
@@ -482,7 +555,7 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
     setTesting(true)
     setTestResult(null)
     const tempId = `test-${Date.now()}`
-    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl })
+    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
     await window.electronAPI!.pg.disconnect(tempId)
     setTestResult(res.ok ? { ok: true, msg: 'Connection successful' } : { ok: false, msg: res.error ?? 'Failed' })
     setTesting(false)
@@ -501,7 +574,7 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
     setLoading(true)
     const name = `${host}:${port}${database ? ' / ' + database : ''}`
     try {
-      await onSave(conn.id, { label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl })
+      await onSave(conn.id, { label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -525,7 +598,12 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
             <p className="text-sm text-muted-foreground">
               This connection is currently active. You need to disconnect before editing.
             </p>
-            {error && <p className="text-xs text-destructive">{error}</p>}
+            {error && (
+              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
+                <X className="h-3.5 w-3.5 text-red-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-400 whitespace-pre-wrap break-words">{error}</p>
+              </div>
+            )}
             <div className="flex items-center justify-end gap-2">
               <button onClick={onClose} className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors border border-border">
                 Cancel
@@ -590,9 +668,68 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
               </button>
               <span className="text-xs text-muted-foreground select-none cursor-pointer" onClick={() => setSsl(!ssl)}>SSL Connection</span>
             </div>
-            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Shield className="h-3 w-3" /> OpenVPN Config <span className="text-muted-foreground/50">(optional)</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 bg-background border border-border rounded px-2 py-1.5 text-xs text-muted-foreground truncate">
+                  {vpnConfigPath ? vpnFileName(vpnConfigPath) : 'No .ovpn file selected'}
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const p = await window.electronAPI!.pg.selectOvpnFile()
+                    if (p) setVpnConfigPath(p)
+                  }}
+                  className="px-2.5 py-1.5 rounded text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors shrink-0"
+                >
+                  Browse
+                </button>
+                {vpnConfigPath && (
+                  <button type="button" onClick={() => { setVpnConfigPath(''); setVpnUsername(''); setVpnPassword('') }} className="text-muted-foreground hover:text-foreground transition-colors">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {vpnConfigPath && (
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">VPN Username <span className="text-muted-foreground/50">(if required)</span></label>
+                    <input
+                      value={vpnUsername} onChange={e => setVpnUsername(e.target.value)}
+                      placeholder="username"
+                      className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">VPN Password <span className="text-muted-foreground/50">(if required)</span></label>
+                    <input
+                      type="password"
+                      value={vpnPassword} onChange={e => setVpnPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+            {error && (
+              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
+                <X className="h-3.5 w-3.5 text-red-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-400 whitespace-pre-wrap break-words">{error}</p>
+              </div>
+            )}
             {testResult && (
-              <p className={`text-xs ${testResult.ok ? 'text-green-500' : 'text-destructive'}`}>{testResult.msg}</p>
+              testResult.ok
+                ? <div className="flex items-center gap-2 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2">
+                    <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                    <p className="text-xs text-green-500">{testResult.msg}</p>
+                  </div>
+                : <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                    <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+                    <p className="text-xs text-destructive whitespace-pre-wrap break-words">{testResult.msg}</p>
+                  </div>
             )}
             <div className="flex items-center gap-2 pt-1">
               <button
@@ -3227,6 +3364,16 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
     })
     const stmt = `SELECT * FROM "${fnRunDialog.schemaName}"."${fnRunDialog.functionName}"(${valuesList.join(', ')});`
 
+    // Save parameters to localStorage before closing the dialog
+    const conn = connections.find(c => c.id === connId)
+    const hostDbKey = conn ? `${conn.host}:${conn.port}/${conn.database}` : 'default'
+    const storageKey = `fn-params:${hostDbKey}:${fnRunDialog.schemaName}:${fnRunDialog.functionName}`
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(paramValues))
+    } catch (e) {
+      console.error('Failed to save function parameters', e)
+    }
+
     setFnRunDialog(null)
     onChange(tab.id, { running: true, results: [], connectionId: connId })
 
@@ -3287,9 +3434,28 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
       if (schemaName && tableName) {
         const parsedArgs = parseArguments(functionArguments ?? '')
         if (parsedArgs.length > 0) {
+          const connId = tab.connectionId ?? connections.find(c => c.status === 'connected')?.id
+          const conn = connections.find(c => c.id === connId)
+          const hostDbKey = conn ? `${conn.host}:${conn.port}/${conn.database}` : 'default'
+          const storageKey = `fn-params:${hostDbKey}:${schemaName}:${tableName}`
+          
+          let savedVals: Record<string, string> = {}
+          try {
+            const saved = localStorage.getItem(storageKey)
+            if (saved) {
+              savedVals = JSON.parse(saved)
+            }
+          } catch (e) {
+            console.error('Failed to load function parameters', e)
+          }
+
           const initialVals: Record<string, string> = {}
           parsedArgs.forEach(arg => {
-            initialVals[arg.name] = arg.defaultValue || ''
+            if (savedVals[arg.name] !== undefined) {
+              initialVals[arg.name] = savedVals[arg.name]
+            } else {
+              initialVals[arg.name] = arg.defaultValue || ''
+            }
           })
           setParamValues(initialVals)
           setFnRunDialog({
@@ -4696,6 +4862,9 @@ interface PersistedConnection {
   user: string
   password: string
   ssl: boolean
+  vpnConfigPath?: string
+  vpnUsername?: string
+  vpnPassword?: string
 }
 
 interface PersistedTab {
@@ -4752,6 +4921,7 @@ function savePersistedConnections(conns: DbConnection[]) {
     const data: PersistedConnection[] = conns.map(c => ({
       id: c.id, label: c.label, name: c.name, host: c.host, port: c.port,
       database: c.database, user: c.user, password: c.password, ssl: c.ssl,
+      vpnConfigPath: c.vpnConfigPath, vpnUsername: c.vpnUsername, vpnPassword: c.vpnPassword,
     }))
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   } catch {}
@@ -5033,11 +5203,11 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     const saved = loadPersistedConnections()
     if (!saved.length) return
-    const restored: DbConnection[] = saved.map(s => ({ ...s, label: s.label ?? '', status: 'connecting' as const, databases: [] }))
+    const restored: DbConnection[] = saved.map(s => ({ ...s, label: s.label ?? '', vpnConfigPath: s.vpnConfigPath, vpnUsername: s.vpnUsername, vpnPassword: s.vpnPassword, status: 'connecting' as const, databases: [] }))
     setConnections(restored)
     setActiveConnId(prev => prev ?? restored[0].id)
     saved.forEach(async s => {
-      const res = await window.electronAPI!.pg.connect({ id: s.id, host: s.host, port: s.port, database: s.database, user: s.user, password: s.password, ssl: s.ssl })
+      const res = await window.electronAPI!.pg.connect({ id: s.id, host: s.host, port: s.port, database: s.database, user: s.user, password: s.password, ssl: s.ssl, vpnConfigPath: s.vpnConfigPath, vpnUsername: s.vpnUsername, vpnPassword: s.vpnPassword })
       if (!res.ok) {
         setConnections(prev => prev.map(c => c.id === s.id ? { ...c, status: 'error', errorMsg: res.error } : c))
         return
@@ -5126,7 +5296,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
     setConnections(prev => [...prev, newConn])
     setActiveConnId(id)
 
-    const res = await window.electronAPI!.pg.connect({ id, ...opts })
+    const res = await window.electronAPI!.pg.connect({ id, ...opts, vpnConfigPath: opts.vpnConfigPath })
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id === id ? { ...c, status: 'error', errorMsg: res.error } : c))
       throw new Error(res.error)
@@ -5210,12 +5380,12 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   }, [])
 
   const handleReconnect = useCallback(async (connId: string) => {
-    type ConnData = Pick<DbConnection, 'host' | 'port' | 'database' | 'user' | 'password' | 'ssl'>
+    type ConnData = Pick<DbConnection, 'host' | 'port' | 'database' | 'user' | 'password' | 'ssl' | 'vpnConfigPath' | 'vpnUsername' | 'vpnPassword'>
     let connData: ConnData | null = null
     setConnections(prev => {
       const conn = prev.find(c => c.id === connId)
       if (!conn) return prev
-      connData = { host: conn.host, port: conn.port, database: conn.database, user: conn.user, password: conn.password, ssl: conn.ssl }
+      connData = { host: conn.host, port: conn.port, database: conn.database, user: conn.user, password: conn.password, ssl: conn.ssl, vpnConfigPath: conn.vpnConfigPath, vpnUsername: conn.vpnUsername, vpnPassword: conn.vpnPassword }
       return prev.map(c => c.id === connId ? { ...c, status: 'connecting', databases: [] } : c)
     })
     if (!connData) return

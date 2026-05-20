@@ -62,6 +62,7 @@ import type { Workspace, Environment, EnvironmentVariable } from '@/lib/db/types
 import { leaveWorkspace } from '@/lib/collaboration/store'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
 import { DatabaseView } from './database-view'
+import { TerminalView } from './terminal-view'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -161,11 +162,11 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Sequence state
   const [activeView, setActiveView] = useState<'requests' | 'sequences' | 'jwt' | 'json' | 'diff'>('requests')
-  const [appMode, setAppMode] = useState<'api' | 'database'>(() => {
-    try { return (localStorage.getItem('quence-app-mode') as 'api' | 'database') || 'api' } catch { return 'api' }
+  const [appMode, setAppMode] = useState<'api' | 'database' | 'terminal'>(() => {
+    try { return (localStorage.getItem('quence-app-mode') as 'api' | 'database' | 'terminal') || 'api' } catch { return 'api' }
   })
-  const [switchingMode, setSwitchingMode] = useState<'api' | 'database' | null>(null)
-  const switchMode = (mode: 'api' | 'database') => {
+  const [switchingMode, setSwitchingMode] = useState<'api' | 'database' | 'terminal' | null>(null)
+  const switchMode = (mode: 'api' | 'database' | 'terminal') => {
     setSwitchingMode(mode)
     setTimeout(() => { setAppMode(mode); try { localStorage.setItem('quence-app-mode', mode) } catch {} }, 150)
     setTimeout(() => setSwitchingMode(null), 600)
@@ -1666,6 +1667,9 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       {/* Main content */}
       <div className={appMode === 'database' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
         <DatabaseView isActive={appMode === 'database'} />
+      </div>
+      <div className={appMode === 'terminal' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+        <TerminalView isActive={appMode === 'terminal'} />
       </div>
       <div className={appMode === 'api' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
       <>
