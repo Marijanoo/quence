@@ -9,7 +9,7 @@ import {
 import {
   Database, Table2, FunctionSquare, ChevronRight, ChevronDown,
   Plus, Play, PlugZap, FileCode2, RefreshCw, X, FileText, Loader2, View, Pencil, Save, FileCode, Search, Plug,
-  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight, Shield,
+  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight, Shield, Tag, Shapes,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { generateId } from '@/lib/utils'
@@ -25,6 +25,7 @@ import { SearchCursor } from '@codemirror/search'
 
 interface DbConnection {
   id: string
+  dbType: 'postgres' | 'mysql'
   label: string   // user-defined display name
   name: string    // auto-generated "host:port / db"
   host: string
@@ -56,46 +57,41 @@ interface SchemaEntry {
   views: { name: string; type: string }[]
   materializedViews: { name: string; type: string }[]
   functions: { name: string; arguments: string }[]
+  enums: { name: string; values: string[] }[]
+  types: { name: string; definition: string }[]
   open: boolean
 }
 
-function buildSchemaEntries(tables: any[] = [], functions: any[] = []): SchemaEntry[] {
+function buildSchemaEntries(tables: any[] = [], functions: any[] = [], enums: any[] = [], types: any[] = []): SchemaEntry[] {
   const schemaMap = new Map<string, SchemaEntry>()
+
+  function getOrCreate(schema: string): SchemaEntry {
+    if (!schemaMap.has(schema)) {
+      schemaMap.set(schema, { name: schema, tables: [], views: [], materializedViews: [], functions: [], enums: [], types: [], open: true })
+    }
+    return schemaMap.get(schema)!
+  }
+
   for (const t of tables) {
-    if (!schemaMap.has(t.table_schema)) {
-      schemaMap.set(t.table_schema, {
-        name: t.table_schema,
-        tables: [],
-        views: [],
-        materializedViews: [],
-        functions: [],
-        open: true
-      })
-    }
-    const entry = schemaMap.get(t.table_schema)!
-    if (t.table_type === 'BASE TABLE') {
-      entry.tables.push({ name: t.table_name, type: 'TABLE' })
-    } else if (t.table_type === 'VIEW') {
-      entry.views.push({ name: t.table_name, type: 'VIEW' })
-    } else if (t.table_type === 'MATERIALIZED VIEW') {
-      entry.materializedViews.push({ name: t.table_name, type: 'MATERIALIZED VIEW' })
-    }
+    const entry = getOrCreate(t.table_schema)
+    if (t.table_type === 'BASE TABLE') entry.tables.push({ name: t.table_name, type: 'TABLE' })
+    else if (t.table_type === 'VIEW') entry.views.push({ name: t.table_name, type: 'VIEW' })
+    else if (t.table_type === 'MATERIALIZED VIEW') entry.materializedViews.push({ name: t.table_name, type: 'MATERIALIZED VIEW' })
   }
   for (const f of functions) {
-    if (!schemaMap.has(f.routine_schema)) {
-      schemaMap.set(f.routine_schema, {
-        name: f.routine_schema,
-        tables: [],
-        views: [],
-        materializedViews: [],
-        functions: [],
-        open: true
-      })
-    }
-    const entry = schemaMap.get(f.routine_schema)!
+    const entry = getOrCreate(f.routine_schema)
     if (!entry.functions.some(item => item.name === f.routine_name && item.arguments === (f.arguments ?? ''))) {
       entry.functions.push({ name: f.routine_name, arguments: f.arguments ?? '' })
     }
+  }
+  for (const e of enums) {
+    const entry = getOrCreate(e.schema)
+    const values = typeof e.values === 'string' ? e.values.split(',') : (e.values ?? [])
+    entry.enums.push({ name: e.name, values })
+  }
+  for (const t of types) {
+    const entry = getOrCreate(t.schema)
+    entry.types.push({ name: t.name, definition: t.definition })
   }
   return [...schemaMap.values()]
 }
@@ -305,7 +301,25 @@ function vpnFileName(p: string) {
   return p.split(/[\\/]/).pop() ?? p
 }
 
+function parseConnectionString(str: string, dbType: 'postgres' | 'mysql'): Partial<{ host: string; port: string; database: string; user: string; password: string; ssl: boolean }> {
+  try {
+    const url = new URL(str)
+    return {
+      host: url.hostname || 'localhost',
+      port: url.port || (dbType === 'mysql' ? '3306' : '5432'),
+      database: url.pathname.replace(/^\//, '') || '',
+      user: url.username ? decodeURIComponent(url.username) : '',
+      password: url.password ? decodeURIComponent(url.password) : '',
+      ssl: url.searchParams.get('sslmode') === 'require' || url.searchParams.get('ssl') === 'true',
+    }
+  } catch {
+    return {}
+  }
+}
+
 function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
+  const [dbType, setDbType] = useState<'postgres' | 'mysql'>('postgres')
+  const [connString, setConnString] = useState('')
   const [label, setLabel] = useState('')
   const [host, setHost] = useState('localhost')
   const [port, setPort] = useState('5432')
@@ -321,14 +335,35 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [error, setError] = useState('')
 
+  const defaultPort = dbType === 'mysql' ? '3306' : '5432'
   const name = `${host}:${port}${database ? ' / ' + database : ''}`
+
+  function switchDbType(t: 'postgres' | 'mysql') {
+    setDbType(t)
+    setTestResult(null)
+    // Only auto-update port if it's still the default for the current type
+    setPort(prev => (prev === '5432' || prev === '3306') ? (t === 'mysql' ? '3306' : '5432') : prev)
+  }
+
+  function applyConnString(str: string) {
+    const parsed = parseConnectionString(str.trim(), dbType)
+    if (parsed.host) setHost(parsed.host)
+    if (parsed.port) setPort(parsed.port)
+    if (parsed.database !== undefined) setDatabase(parsed.database)
+    if (parsed.user !== undefined) setUser(parsed.user)
+    if (parsed.password !== undefined) setPassword(parsed.password)
+    if (parsed.ssl !== undefined) setSsl(parsed.ssl)
+    setTestResult(null)
+  }
+
+  const ipc = dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
 
   async function handleTest() {
     setTesting(true)
     setTestResult(null)
     const tempId = `test-${Date.now()}`
-    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
-    await window.electronAPI!.pg.disconnect(tempId)
+    const res = await ipc.connect({ id: tempId, host, port: parseInt(port) || (dbType === 'mysql' ? 3306 : 5432), database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
+    await ipc.disconnect(tempId)
     setTestResult(res.ok ? { ok: true, msg: 'Connection successful' } : { ok: false, msg: res.error ?? 'Failed' })
     setTesting(false)
   }
@@ -338,7 +373,7 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
     setError('')
     setLoading(true)
     try {
-      await onConnect({ label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
+      await onConnect({ dbType, label: label.trim(), name, host, port: parseInt(port) || (dbType === 'mysql' ? 3306 : 5432), database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -347,9 +382,11 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
     }
   }
 
+  const inputCls = "w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-card border border-border rounded-lg shadow-xl w-[420px]">
+      <div className="bg-card border border-border rounded-lg shadow-xl w-[440px] max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <span className="text-sm font-semibold">New Connection</span>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
@@ -358,73 +395,80 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
         </div>
 
         <form onSubmit={handleConnect} className="p-5 space-y-3">
+          {/* DB type toggle */}
+          <div className="flex items-center gap-1 p-0.5 bg-muted/40 rounded-md border border-border w-fit">
+            {(['postgres', 'mysql'] as const).map(t => (
+              <button
+                key={t} type="button" onClick={() => switchDbType(t)}
+                className={cn(
+                  'px-3 py-1 rounded text-xs font-medium transition-colors',
+                  dbType === t ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {t === 'postgres' ? 'PostgreSQL' : 'MySQL'}
+              </button>
+            ))}
+          </div>
+
+          {/* Connection string */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Connection String <span className="text-muted-foreground/50">(optional — paste to populate fields)</span></label>
+            <div className="flex gap-2">
+              <input
+                value={connString}
+                onChange={e => setConnString(e.target.value)}
+                placeholder={dbType === 'mysql' ? 'mysql://user:pass@host:3306/db' : 'postgresql://user:pass@host:5432/db'}
+                className={cn(inputCls, 'flex-1 font-mono text-xs')}
+              />
+              <button
+                type="button"
+                onClick={() => applyConnString(connString)}
+                disabled={!connString.trim()}
+                className="px-2.5 py-1.5 rounded text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors shrink-0 disabled:opacity-40"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+
+          <div className="border-t border-border/50" />
+
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Label <span className="text-muted-foreground/50">(optional)</span></label>
-            <input
-              value={label} onChange={e => setLabel(e.target.value)}
-              placeholder="e.g. Production DB"
-              className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-            />
+            <input value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Production DB" className={inputCls} />
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2 space-y-1">
               <label className="text-xs text-muted-foreground">Host</label>
-              <input
-                value={host} onChange={e => setHost(e.target.value)}
-                placeholder="localhost"
-                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-              />
+              <input value={host} onChange={e => setHost(e.target.value)} placeholder="localhost" className={inputCls} />
             </div>
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Port</label>
-              <input
-                value={port} onChange={e => setPort(e.target.value)}
-                placeholder="5432"
-                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-              />
+              <input value={port} onChange={e => setPort(e.target.value)} placeholder={defaultPort} className={inputCls} />
             </div>
           </div>
 
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Database</label>
-            <input
-              value={database} onChange={e => setDatabase(e.target.value)}
-              placeholder="postgres"
-              className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-            />
+            <input value={database} onChange={e => setDatabase(e.target.value)} placeholder={dbType === 'mysql' ? 'my_database' : 'postgres'} className={inputCls} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">User</label>
-              <input
-                value={user} onChange={e => setUser(e.target.value)}
-                placeholder="postgres"
-                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-              />
+              <input value={user} onChange={e => setUser(e.target.value)} placeholder={dbType === 'mysql' ? 'root' : 'postgres'} className={inputCls} />
             </div>
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Password</label>
-              <input
-                type="password"
-                value={password} onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-              />
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className={inputCls} />
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              type="button"
-              onClick={() => setSsl(!ssl)}
-              className={cn(
-                "h-4 w-4 rounded flex items-center justify-center transition-all border shadow-sm",
-                ssl
-                  ? "bg-primary border-primary text-primary-foreground"
-                  : "border-border/85 bg-background hover:border-border"
-              )}
+              type="button" onClick={() => setSsl(!ssl)}
+              className={cn("h-4 w-4 rounded flex items-center justify-center transition-all border shadow-sm", ssl ? "bg-primary border-primary text-primary-foreground" : "border-border/85 bg-background hover:border-border")}
             >
               {ssl && <Check className="h-3 w-3 stroke-[3.5]" />}
             </button>
@@ -441,10 +485,7 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
               </div>
               <button
                 type="button"
-                onClick={async () => {
-                  const p = await window.electronAPI!.pg.selectOvpnFile()
-                  if (p) setVpnConfigPath(p)
-                }}
+                onClick={async () => { const p = await window.electronAPI!.pg.selectOvpnFile(); if (p) setVpnConfigPath(p) }}
                 className="px-2.5 py-1.5 rounded text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors shrink-0"
               >
                 Browse
@@ -459,29 +500,20 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">VPN Username <span className="text-muted-foreground/50">(if required)</span></label>
-                  <input
-                    value={vpnUsername} onChange={e => setVpnUsername(e.target.value)}
-                    placeholder="username"
-                    className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-                  />
+                  <input value={vpnUsername} onChange={e => setVpnUsername(e.target.value)} placeholder="username" className={inputCls} />
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">VPN Password <span className="text-muted-foreground/50">(if required)</span></label>
-                  <input
-                    type="password"
-                    value={vpnPassword} onChange={e => setVpnPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
-                  />
+                  <input type="password" value={vpnPassword} onChange={e => setVpnPassword(e.target.value)} placeholder="••••••••" className={inputCls} />
                 </div>
               </div>
             )}
           </div>
 
           {error && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
-              <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
-              <p className="text-xs text-destructive whitespace-pre-wrap break-words">{error}</p>
+            <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-950/60 px-3 py-2">
+              <X className="h-3.5 w-3.5 text-red-300 shrink-0 mt-0.5" />
+              <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{error}</p>
             </div>
           )}
           {testResult && (
@@ -490,9 +522,9 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
                   <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
                   <p className="text-xs text-green-500">{testResult.msg}</p>
                 </div>
-              : <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
-                  <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
-                  <p className="text-xs text-destructive whitespace-pre-wrap break-words">{testResult.msg}</p>
+              : <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-950/60 px-3 py-2">
+                  <X className="h-3.5 w-3.5 text-red-300 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{testResult.msg}</p>
                 </div>
           )}
 
@@ -505,10 +537,7 @@ function NewConnectionDialog({ onConnect, onClose }: NewConnectionDialogProps) {
               Test Connection
             </button>
             <div className="flex-1" />
-            <button
-              type="button" onClick={onClose}
-              className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors border border-border"
-            >
+            <button type="button" onClick={onClose} className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors border border-border">
               Cancel
             </button>
             <button
@@ -555,8 +584,9 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
     setTesting(true)
     setTestResult(null)
     const tempId = `test-${Date.now()}`
-    const res = await window.electronAPI!.pg.connect({ id: tempId, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
-    await window.electronAPI!.pg.disconnect(tempId)
+    const ipc = conn.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+    const res = await ipc.connect({ id: tempId, host, port: parseInt(port) || (conn.dbType === 'mysql' ? 3306 : 5432), database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
+    await ipc.disconnect(tempId)
     setTestResult(res.ok ? { ok: true, msg: 'Connection successful' } : { ok: false, msg: res.error ?? 'Failed' })
     setTesting(false)
   }
@@ -574,7 +604,7 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
     setLoading(true)
     const name = `${host}:${port}${database ? ' / ' + database : ''}`
     try {
-      await onSave(conn.id, { label: label.trim(), name, host, port: parseInt(port) || 5432, database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
+      await onSave(conn.id, { dbType: conn.dbType, label: label.trim(), name, host, port: parseInt(port) || (conn.dbType === 'mysql' ? 3306 : 5432), database, user, password, ssl, vpnConfigPath: vpnConfigPath || undefined, vpnUsername: vpnUsername || undefined, vpnPassword: vpnPassword || undefined })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -599,9 +629,9 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
               This connection is currently active. You need to disconnect before editing.
             </p>
             {error && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
-                <X className="h-3.5 w-3.5 text-red-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-red-400 whitespace-pre-wrap break-words">{error}</p>
+              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-950/60 px-3 py-2">
+                <X className="h-3.5 w-3.5 text-red-300 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{error}</p>
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
@@ -715,9 +745,9 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
               )}
             </div>
             {error && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
-                <X className="h-3.5 w-3.5 text-red-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-red-400 whitespace-pre-wrap break-words">{error}</p>
+              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-950/60 px-3 py-2">
+                <X className="h-3.5 w-3.5 text-red-300 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{error}</p>
               </div>
             )}
             {testResult && (
@@ -726,9 +756,9 @@ function EditConnectionDialog({ conn, onSave, onDisconnectAndEdit, onClose }: Ed
                     <Check className="h-3.5 w-3.5 text-green-500 shrink-0" />
                     <p className="text-xs text-green-500">{testResult.msg}</p>
                   </div>
-                : <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
-                    <X className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
-                    <p className="text-xs text-destructive whitespace-pre-wrap break-words">{testResult.msg}</p>
+                : <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-950/60 px-3 py-2">
+                    <X className="h-3.5 w-3.5 text-red-300 shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{testResult.msg}</p>
                   </div>
             )}
             <div className="flex items-center gap-2 pt-1">
@@ -858,6 +888,7 @@ function ConnectionsPanel({
   onOpenTable,
   onOpenTableDesign,
   onOpenFunction,
+  onOpenType,
   activeDbPerConn,
   activeSchemaPerDb,
   openConns,
@@ -887,6 +918,7 @@ function ConnectionsPanel({
   onOpenTable: (connId: string, dbName: string, schema: string, table: string) => void
   onOpenTableDesign: (connId: string, dbName: string, schema: string, table: string) => void
   onOpenFunction: (connId: string, dbName: string, schema: string, functionName: string, args: string) => void
+  onOpenType: (connId: string, dbName: string, schema: string, typeName: string, definition: string) => void
   activeDbPerConn: Record<string, string>
   activeSchemaPerDb: Record<string, string>
   openConns: Set<string>
@@ -900,6 +932,11 @@ function ConnectionsPanel({
 }) {
   const [activeItemKey, setActiveItemKey] = useState<string | null>(null)
   const [sidebarSearch, setSidebarSearch] = useState('')
+
+  const dbIpc = (connId: string) => {
+    const conn = connections.find(c => c.id === connId)
+    return conn?.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+  }
 
   const selectConn = (id: string) => {
     onSelectConn(id)
@@ -929,7 +966,7 @@ function ConnectionsPanel({
 
   const handleRefreshMaterializedView = async (connId: string, dbName: string, schema: string, mvName: string) => {
     const query = `REFRESH MATERIALIZED VIEW "${schema.replace(/"/g, '""')}"."${mvName.replace(/"/g, '""')}";`
-    const res = await window.electronAPI!.pg.query(connId, query, dbName)
+    const res = await dbIpc(connId).query(connId, query, dbName)
     if (res.ok) {
       alert(`Materialized view "${schema}.${mvName}" successfully refreshed!`)
     } else {
@@ -1068,6 +1105,10 @@ function ConnectionsPanel({
                   'text-destructive'
                 )} />
                 <span className="truncate flex-1">{conn.label || conn.name}</span>
+                {conn.dbType === 'mysql'
+                  ? <span className="shrink-0 text-[9px] font-semibold px-1 rounded bg-orange-500/20 text-orange-400 leading-4">MySQL</span>
+                  : <span className="shrink-0 text-[9px] font-semibold px-1 rounded bg-blue-500/20 text-blue-400 leading-4">PgSQL</span>
+                }
                 {conn.status === 'connecting' && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
                 {/* Action buttons — visible on hover */}
                 <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1096,7 +1137,10 @@ function ConnectionsPanel({
               </div>
 
               {isOpen && conn.status === 'error' && (
-                <p className="text-xs text-destructive px-5 py-1">{conn.errorMsg}</p>
+                <div className="flex items-start gap-1.5 mx-3 mb-1 px-2 py-1.5 rounded border border-red-500/30 bg-red-950/60">
+                  <X className="h-3 w-3 text-red-300 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-red-300 leading-snug">{conn.errorMsg}</p>
+                </div>
               )}
 
               {/* Databases */}
@@ -1145,8 +1189,13 @@ function ConnectionsPanel({
                   {/* Schemas */}
                   {(needle ? true : db.open) && db.schemas.filter(schema => !needle || matchingSchemas.has(`${conn.id}::${db.name}::${schema.name}`)).map(schema => {
                     const schemaKey = `${conn.id}::${db.name}::${schema.name}`
+                    const isMysql = conn.dbType === 'mysql'
+                    const groupIndent = isMysql ? 32 : 48
+                    const itemIndent = isMysql ? 48 : 64
+                    const enumItemIndent = isMysql ? 56 : 72
                     return (
                     <div key={schema.name}>
+                      {!isMysql && (
                       <button
                         onClick={() => { onSelectSchema(conn.id, db.name, schema.name); onToggleSchema(conn.id, db.name, schema.name); setActiveItemKey(schemaKey) }}
                         className={cn(
@@ -1161,8 +1210,9 @@ function ConnectionsPanel({
                         <span className="truncate">{schema.name}</span>
                         {activeSchemaPerDb[`${conn.id}::${db.name}`] === schema.name && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                       </button>
+                      )}
 
-                      {(needle ? true : schema.open) && (
+                      {(needle ? true : isMysql ? db.open : schema.open) && (
                         <>
                            {/* Tables group */}
                           {(() => {
@@ -1181,7 +1231,7 @@ function ConnectionsPanel({
                                     'w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left',
                                     activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                   )}
-                                  style={{ paddingLeft: 48 }}
+                                  style={{ paddingLeft: groupIndent }}
                                 >
                                   {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                                   <Table2 className="h-3 w-3 text-primary shrink-0" />
@@ -1203,7 +1253,7 @@ function ConnectionsPanel({
                                             'flex items-center gap-1.5 py-0.5 text-xs rounded cursor-pointer select-none transition-colors group relative pr-8',
                                             activeItemKey === tableKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                           )}
-                                          style={{ paddingLeft: 64 }}
+                                          style={{ paddingLeft: itemIndent }}
                                         >
                                           {t.type === 'VIEW'
                                             ? <View className="h-3.5 w-3.5 text-sky-300 shrink-0" />
@@ -1223,7 +1273,7 @@ function ConnectionsPanel({
                                       )
                                     })
                                   ) : (
-                                    <div className="text-muted-foreground/45 text-[10px] pl-16 py-0.5 select-none font-sans italic">
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>
                                       No tables
                                     </div>
                                   )
@@ -1237,8 +1287,7 @@ function ConnectionsPanel({
                             const groupKey = `${conn.id}::${db.name}::${schema.name}::views`
                             const open = needle ? true : openGroups.has(groupKey)
                             const visibleViews = needle ? (schema.views ?? []).filter(v => matchingViews.has(`${conn.id}::${db.name}::${schema.name}::${v.name}`)) : (schema.views ?? [])
-                            
-                            // If searching and there are no search results, we hide the group
+
                             if (needle && visibleViews.length === 0) return null
 
                             return (
@@ -1249,7 +1298,7 @@ function ConnectionsPanel({
                                     'w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left',
                                     activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                   )}
-                                  style={{ paddingLeft: 48 }}
+                                  style={{ paddingLeft: groupIndent }}
                                 >
                                   {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                                   <View className="h-3 w-3 text-sky-300 shrink-0" />
@@ -1271,7 +1320,7 @@ function ConnectionsPanel({
                                             'flex items-center gap-1.5 py-0.5 text-xs rounded cursor-pointer select-none transition-colors group relative pr-8',
                                             activeItemKey === viewKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                           )}
-                                          style={{ paddingLeft: 64 }}
+                                          style={{ paddingLeft: itemIndent }}
                                         >
                                           <View className="h-3.5 w-3.5 text-sky-300 shrink-0" />
                                           <span className="truncate flex-1">{v.name}</span>
@@ -1279,7 +1328,7 @@ function ConnectionsPanel({
                                       )
                                     })
                                   ) : (
-                                    <div className="text-muted-foreground/45 text-[10px] pl-16 py-0.5 select-none font-sans italic">
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>
                                       No views
                                     </div>
                                   )
@@ -1288,13 +1337,12 @@ function ConnectionsPanel({
                             )
                           })()}
 
-                          {/* Materialized Views group */}
-                          {(() => {
+                          {/* Materialized Views group — Postgres only */}
+                          {!isMysql && (() => {
                             const groupKey = `${conn.id}::${db.name}::${schema.name}::matviews`
                             const open = needle ? true : openGroups.has(groupKey)
                             const visibleMatViews = needle ? (schema.materializedViews ?? []).filter(mv => matchingMaterialized.has(`${conn.id}::${db.name}::${schema.name}::${mv.name}`)) : (schema.materializedViews ?? [])
-                            
-                            // If searching and there are no search results, we hide the group
+
                             if (needle && visibleMatViews.length === 0) return null
 
                             return (
@@ -1305,7 +1353,7 @@ function ConnectionsPanel({
                                     'w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left',
                                     activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                   )}
-                                  style={{ paddingLeft: 48 }}
+                                  style={{ paddingLeft: groupIndent }}
                                 >
                                   {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                                   <View className="h-3 w-3 text-teal-300 shrink-0" />
@@ -1327,7 +1375,7 @@ function ConnectionsPanel({
                                             'flex items-center gap-1.5 py-0.5 text-xs rounded cursor-pointer select-none transition-colors group relative pr-8',
                                             activeItemKey === mvKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                           )}
-                                          style={{ paddingLeft: 64 }}
+                                          style={{ paddingLeft: itemIndent }}
                                         >
                                           <View className="h-3.5 w-3.5 text-teal-300 shrink-0" />
                                           <span className="truncate flex-1">{mv.name}</span>
@@ -1342,7 +1390,7 @@ function ConnectionsPanel({
                                       )
                                     })
                                   ) : (
-                                    <div className="text-muted-foreground/45 text-[10px] pl-16 py-0.5 select-none font-sans italic">
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>
                                       No materialized views
                                     </div>
                                   )
@@ -1356,8 +1404,7 @@ function ConnectionsPanel({
                             const groupKey = `${conn.id}::${db.name}::${schema.name}::functions`
                             const open = needle ? true : openGroups.has(groupKey)
                             const visibleFns = needle ? schema.functions.filter(fn => matchingFns.has(`${conn.id}::${db.name}::${schema.name}::${fn.name}::${fn.arguments}`)) : schema.functions
-                            
-                            // If searching and there are no search results, we hide the group
+
                             if (needle && visibleFns.length === 0) return null
 
                             return (
@@ -1368,7 +1415,7 @@ function ConnectionsPanel({
                                     'w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left',
                                     activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                   )}
-                                  style={{ paddingLeft: 48 }}
+                                  style={{ paddingLeft: groupIndent }}
                                 >
                                   {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                                   <FunctionSquare className="h-3 w-3 text-purple-300 shrink-0" />
@@ -1390,7 +1437,7 @@ function ConnectionsPanel({
                                             'flex items-center gap-1.5 py-0.5 text-xs rounded cursor-pointer select-none transition-colors',
                                             activeItemKey === fnKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground'
                                           )}
-                                          style={{ paddingLeft: 64 }}
+                                          style={{ paddingLeft: itemIndent }}
                                         >
                                           <FunctionSquare className="h-3.5 w-3.5 text-purple-300 shrink-0" />
                                           <span className="truncate flex-1">
@@ -1401,9 +1448,106 @@ function ConnectionsPanel({
                                       )
                                     })
                                   ) : (
-                                    <div className="text-muted-foreground/45 text-[10px] pl-16 py-0.5 select-none font-sans italic">
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>
                                       No functions
                                     </div>
+                                  )
+                                )}
+                              </>
+                            )
+                          })()}
+
+                          {/* Enums group */}
+                          {(() => {
+                            const groupKey = `${conn.id}::${db.name}::${schema.name}::enums`
+                            const open = openGroups.has(groupKey)
+                            if (needle && schema.enums.length === 0) return null
+                            return (
+                              <>
+                                <button
+                                  onClick={() => { onSelectSchema(conn.id, db.name, schema.name); toggleGroup(groupKey); setActiveItemKey(groupKey) }}
+                                  className={cn('w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left', activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
+                                  style={{ paddingLeft: groupIndent }}
+                                >
+                                  {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                                  <Tag className="h-3 w-3 text-yellow-400 shrink-0" />
+                                  <span>Enums</span>
+                                  <span className="ml-1 text-muted-foreground/50">({schema.enums.length})</span>
+                                </button>
+                                {open && (
+                                  schema.enums.length > 0 ? (
+                                    schema.enums.map(en => {
+                                      const enKey = `${conn.id}::${db.name}::${schema.name}::enum::${en.name}`
+                                      const enOpen = openGroups.has(enKey)
+                                      return (
+                                        <div key={enKey}>
+                                          <button
+                                            onClick={() => { setActiveItemKey(enKey); toggleGroup(enKey) }}
+                                            className={cn('w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left', activeItemKey === enKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
+                                            style={{ paddingLeft: itemIndent }}
+                                          >
+                                            {enOpen ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                                            <Tag className="h-3 w-3 text-yellow-400 shrink-0" />
+                                            <span className="truncate">{en.name}</span>
+                                            <span className="ml-1 text-muted-foreground/50">({en.values.length})</span>
+                                          </button>
+                                          {enOpen && (
+                                            <div className="flex flex-wrap gap-1 py-1" style={{ paddingLeft: enumItemIndent, paddingRight: 8 }}>
+                                              {en.values.map(v => (
+                                                <span key={v} className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-400/10 text-yellow-300 border border-yellow-400/20 leading-none">{v}</span>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )
+                                    })
+                                  ) : (
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>No enums</div>
+                                  )
+                                )}
+                              </>
+                            )
+                          })()}
+
+                          {/* Types group — Postgres only */}
+                          {!isMysql && (() => {
+                            const groupKey = `${conn.id}::${db.name}::${schema.name}::types`
+                            const open = openGroups.has(groupKey)
+                            if (needle && schema.types.length === 0) return null
+                            return (
+                              <>
+                                <button
+                                  onClick={() => { onSelectSchema(conn.id, db.name, schema.name); toggleGroup(groupKey); setActiveItemKey(groupKey) }}
+                                  className={cn('w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left', activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
+                                  style={{ paddingLeft: groupIndent }}
+                                >
+                                  {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                                  <Shapes className="h-3 w-3 text-orange-400 shrink-0" />
+                                  <span>Types</span>
+                                  <span className="ml-1 text-muted-foreground/50">({schema.types.length})</span>
+                                </button>
+                                {open && (
+                                  schema.types.length > 0 ? (
+                                    schema.types.map(tp => {
+                                      const tpKey = `${conn.id}::${db.name}::${schema.name}::type::${tp.name}`
+                                      return (
+                                        <div
+                                          key={tpKey}
+                                          role="button" tabIndex={0}
+                                          onClick={() => setActiveItemKey(tpKey)}
+                                          onDoubleClick={() => onOpenType(conn.id, db.name, schema.name, tp.name, tp.definition)}
+                                          onKeyDown={e => e.key === 'Enter' && onOpenType(conn.id, db.name, schema.name, tp.name, tp.definition)}
+                                          className={cn('flex items-center gap-1.5 py-0.5 text-xs rounded cursor-pointer select-none transition-colors', activeItemKey === tpKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
+                                          style={{ paddingLeft: itemIndent }}
+                                        >
+                                          <Shapes className="h-3 w-3 text-orange-400 shrink-0" />
+                                          <span className="truncate flex-1">{tp.name}</span>
+                                          <span className="text-muted-foreground/50 text-[10px] shrink-0">{tp.definition}</span>
+                                        </div>
+                                      )
+                                    })
+                                  ) : (
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>No types</div>
                                   )
                                 )}
                               </>
@@ -1414,8 +1558,7 @@ function ConnectionsPanel({
                           {(() => {
                             const allSchemaSaved = savedQueries.filter(q => q.connectionId === conn.id && q.databaseName === db.name && q.schemaName === schema.name)
                             const schemaSaved = needle ? allSchemaSaved.filter(sq => matchingSaved.has(sq.id)) : allSchemaSaved
-                            
-                            // If searching and there are no search results, we hide the group
+
                             if (needle && schemaSaved.length === 0) return null
 
                             const groupKey = `${conn.id}::${db.name}::${schema.name}::saved`
@@ -1425,7 +1568,7 @@ function ConnectionsPanel({
                                 <button
                                   onClick={() => { onSelectSchema(conn.id, db.name, schema.name); toggleGroup(groupKey); setActiveItemKey(groupKey) }}
                                   className={cn('w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors text-left', activeItemKey === groupKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
-                                  style={{ paddingLeft: 48 }}
+                                  style={{ paddingLeft: groupIndent }}
                                 >
                                   {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                                   <Save className="h-3 w-3 text-primary/70 shrink-0" />
@@ -1440,10 +1583,11 @@ function ConnectionsPanel({
                                         <div
                                           key={sq.id}
                                           role="button" tabIndex={0}
-                                          onClick={() => { onSelectSchema(conn.id, db.name, schema.name); onOpenSavedQuery(sq); setActiveItemKey(sqKey) }}
+                                          onClick={() => { onSelectSchema(conn.id, db.name, schema.name); setActiveItemKey(sqKey) }}
+                                          onDoubleClick={() => onOpenSavedQuery(sq)}
                                           onKeyDown={e => e.key === 'Enter' && (onSelectSchema(conn.id, db.name, schema.name), onOpenSavedQuery(sq), setActiveItemKey(sqKey))}
                                           className={cn('group w-full flex items-center gap-1.5 py-0.5 text-xs rounded transition-colors cursor-pointer select-none', activeItemKey === sqKey ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:bg-accent/20 hover:text-foreground')}
-                                          style={{ paddingLeft: 64 }}
+                                          style={{ paddingLeft: itemIndent }}
                                         >
                                           <FileCode className="h-3 w-3 shrink-0" />
                                           <span className="truncate flex-1">{sq.title}</span>
@@ -1465,7 +1609,7 @@ function ConnectionsPanel({
                                       )
                                     })
                                   ) : (
-                                    <div className="text-muted-foreground/45 text-[10px] pl-16 py-0.5 select-none font-sans italic">
+                                    <div className="text-muted-foreground/45 text-[10px] py-0.5 select-none font-sans italic" style={{ paddingLeft: itemIndent }}>
                                       No saved queries
                                     </div>
                                   )
@@ -1501,11 +1645,12 @@ function QueryTabBar({
   return (
     <div className="flex items-end border-b border-border bg-card shrink-0 overflow-x-auto">
       {tabs.map(tab => {
-        const isChanged = (tab.isFunction && tab.sql !== tab.originalSql) || (tab.kind === 'design' && isTableDesignChanged(tab))
+        const isChanged = (tab.isFunction && tab.sql !== tab.originalSql) || (tab.kind === 'design' && isTableDesignChanged(tab)) || (!tab.isFunction && tab.kind === 'query' && tab.originalSql !== undefined && tab.sql !== tab.originalSql && tab.sql.trim() !== '')
         return (
           <div
             key={tab.id}
             onClick={() => onSelect(tab.id)}
+            onMouseDown={e => { if (e.button === 1) { e.preventDefault(); onClose(tab.id) } }}
             className={cn(
               'group flex items-center gap-1.5 px-3 h-8 text-xs cursor-pointer border-r border-border shrink-0 transition-colors select-none',
               tab.id === activeId
@@ -1521,6 +1666,8 @@ function QueryTabBar({
               <Workflow className="h-3 w-3 shrink-0 text-primary" />
             ) : tab.isFunction ? (
               <FunctionSquare className="h-3 w-3 shrink-0 text-purple-300" />
+            ) : tab.tableName?.startsWith('type:') ? (
+              <Shapes className="h-3 w-3 shrink-0 text-orange-400" />
             ) : (
               <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
             )}
@@ -1681,7 +1828,14 @@ function SingleResultGrid({ result, columnTypes }: { result: QueryResult; column
   }, [selectedCell, editingCell, result])
 
   if (result.error) {
-    return <div className="flex-1 flex items-center justify-center"><p className="text-xs text-destructive max-w-sm text-center">{result.error}</p></div>
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-950/60 px-4 py-3 max-w-lg">
+          <X className="h-4 w-4 text-red-300 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-300 whitespace-pre-wrap break-words">{result.error}</p>
+        </div>
+      </div>
+    )
   }
   if (result.fields.length === 0) {
     return <div className="flex-1 flex items-center justify-center"><p className="text-xs text-muted-foreground">Query executed successfully — no rows returned</p></div>
@@ -1861,7 +2015,7 @@ function ResultsGrid({ results, running, statusBorder, columnTypes }: {
               className={cn(
                 'px-3 h-7 text-xs border-r border-border last:border-r-0 transition-colors whitespace-nowrap',
                 i === activeIdx ? 'bg-background text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent/20',
-                r.error ? 'text-destructive' : ''
+                r.error ? 'bg-red-950/60 text-red-300' : ''
               )}
             >
               Result {i + 1}
@@ -1877,7 +2031,9 @@ function ResultsGrid({ results, running, statusBorder, columnTypes }: {
             {results.length > 1 && <span className="text-xs text-muted-foreground/40">{results.length} statements · {totalMs}ms total</span>}
           </>
         )}
-        {!running && result?.error && <span className="text-xs text-destructive truncate">{result.error}</span>}
+        {!running && result?.error && (
+          <span className="text-xs bg-red-950/60 text-red-300 px-2 py-0.5 rounded truncate">{result.error}</span>
+        )}
       </div>
     </div>
   )
@@ -2660,7 +2816,7 @@ function ErdDiagramView({
     if (!container) return
 
     const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
+      if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
         const zoomStep = 0.05
         setZoom(prev => {
@@ -2681,7 +2837,7 @@ function ErdDiagramView({
     if (!isHovered) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && (e.key === '=' || e.key === '+' || e.key === '-')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+' || e.key === '-')) {
         e.preventDefault()
         const zoomStep = 0.1
         setZoom(prev => {
@@ -3007,6 +3163,7 @@ function QueryPane({
   onOpenTable,
   onOpenTableDesign,
   onRefreshDb,
+  onAfterRun,
   isSaved,
   isActive,
   runTrigger,
@@ -3019,10 +3176,16 @@ function QueryPane({
   onOpenTable: (connId: string, dbName: string, schema: string, table: string) => void
   onOpenTableDesign: (connId: string, dbName: string, schema: string, table: string) => void
   onRefreshDb: (connId: string, dbName: string) => void
+  onAfterRun?: (tab: QueryTab, ok: boolean) => void
   isSaved: boolean
   isActive: boolean
   runTrigger: number
 }) {
+  const dbIpc = useCallback((connId: string) => {
+    const conn = connections.find(c => c.id === connId)
+    return conn?.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+  }, [connections])
+
   const editorRef = useRef<SqlEditorHandle>(null)
   const [showFind, setShowFind] = useState(false)
   const [fnRunDialog, setFnRunDialog] = useState<{ functionName: string; schemaName: string; args: { name: string; type: string; defaultValue: string }[] } | null>(null)
@@ -3113,11 +3276,11 @@ FROM information_schema.triggers
 WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_table = '${table.replace(/'/g, "''")}';`
 
     Promise.all([
-      window.electronAPI!.pg.query(connId, colsQuery, tab.databaseName ?? undefined),
-      window.electronAPI!.pg.query(connId, indexesQuery, tab.databaseName ?? undefined),
-      window.electronAPI!.pg.query(connId, fkeysQuery, tab.databaseName ?? undefined),
-      window.electronAPI!.pg.query(connId, uniquesQuery, tab.databaseName ?? undefined),
-      window.electronAPI!.pg.query(connId, triggersQuery, tab.databaseName ?? undefined)
+      dbIpc(connId).query(connId, colsQuery, tab.databaseName ?? undefined),
+      dbIpc(connId).query(connId, indexesQuery, tab.databaseName ?? undefined),
+      dbIpc(connId).query(connId, fkeysQuery, tab.databaseName ?? undefined),
+      dbIpc(connId).query(connId, uniquesQuery, tab.databaseName ?? undefined),
+      dbIpc(connId).query(connId, triggersQuery, tab.databaseName ?? undefined)
     ]).then(([colsRes, idxsRes, fkeysRes, uniqsRes, trigsRes]) => {
       const columnsList: DesignColumn[] = (colsRes.rows ?? []).map((r: any) => ({
         id: generateId(),
@@ -3250,8 +3413,8 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
     `
 
     Promise.all([
-      window.electronAPI!.pg.query(connId, colsQuery, tab.databaseName),
-      window.electronAPI!.pg.query(connId, fkeysQuery, tab.databaseName)
+      dbIpc(connId).query(connId, colsQuery, tab.databaseName),
+      dbIpc(connId).query(connId, fkeysQuery, tab.databaseName)
     ]).then(([colsRes, fkeysRes]) => {
       if (!colsRes.ok) {
         onChange(tab.id, { running: false, erdTables: [] })
@@ -3377,7 +3540,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
     setFnRunDialog(null)
     onChange(tab.id, { running: true, results: [], connectionId: connId })
 
-    const res = await window.electronAPI!.pg.query(connId, stmt, tab.databaseName ?? undefined)
+    const res = await dbIpc(connId).query(connId, stmt, tab.databaseName ?? undefined)
     const collected: QueryResult[] = []
     if (res.ok) {
       collected.push({ fields: res.fields ?? [], rows: res.rows ?? [], rowCount: res.rowCount ?? null, ms: res.ms ?? 0, statement: stmt })
@@ -3411,7 +3574,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
         `
         try {
           onChange(tab.id, { running: true })
-          const res = await window.electronAPI!.pg.query(connId, query, tab.databaseName ?? undefined)
+          const res = await dbIpc(connId).query(connId, query, tab.databaseName ?? undefined)
           onChange(tab.id, { running: false })
           if (res.ok && res.rows && res.rows.length > 0) {
             const row = res.rows[0] as any
@@ -3469,7 +3632,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
           if (!connId) return
           const stmt = `SELECT * FROM "${schemaName}"."${tableName}"();`
           onChange(tab.id, { running: true, results: [], connectionId: connId })
-          const res = await window.electronAPI!.pg.query(connId, stmt, tab.databaseName ?? undefined)
+          const res = await dbIpc(connId).query(connId, stmt, tab.databaseName ?? undefined)
           const collected: QueryResult[] = []
           if (res.ok) {
             collected.push({ fields: res.fields ?? [], rows: res.rows ?? [], rowCount: res.rowCount ?? null, ms: res.ms ?? 0, statement: stmt })
@@ -3494,7 +3657,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
 
     const collected: QueryResult[] = []
     for (const stmt of statements) {
-      const res = await window.electronAPI!.pg.query(connId, stmt, tab.databaseName ?? undefined)
+      const res = await dbIpc(connId).query(connId, stmt, tab.databaseName ?? undefined)
       if (res.ok) {
         collected.push({ fields: res.fields ?? [], rows: res.rows ?? [], rowCount: res.rowCount ?? null, ms: res.ms ?? 0, statement: stmt })
       } else {
@@ -3503,11 +3666,14 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
       }
     }
 
-    onChange(tab.id, { running: false, results: collected })
-    const totalMs = collected.reduce((s, r) => s + r.ms, 0)
     const lastError = collected.find(r => r.error)?.error
+    onChange(tab.id, { running: false, results: collected, ...(!lastError && !tab.isFunction ? { originalSql: sqlToRun } : {}) })
+    const totalMs = collected.reduce((s, r) => s + r.ms, 0)
     setQueryHistory(prev => [{ sql: sqlToRun, ts: Date.now(), ms: totalMs, error: lastError }, ...prev].slice(0, 50))
-  }, [tab, connections, onChange])
+    if (tab.databaseName && (tab.isFunction || tab.tableName?.startsWith('type:'))) {
+      onAfterRun?.(tab, !lastError)
+    }
+  }, [tab, connections, onChange, onAfterRun])
 
   const explainQuery = useCallback(async () => {
     if (tab.running) return
@@ -3521,10 +3687,10 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
     const explainStmt = `EXPLAIN (ANALYZE, COSTS, VERBOSE, BUFFERS) ${sqlToRun};`
     onChange(tab.id, { running: true, results: [], connectionId: connId })
 
-    let res = await window.electronAPI!.pg.query(connId, explainStmt, tab.databaseName ?? undefined)
+    let res = await dbIpc(connId).query(connId, explainStmt, tab.databaseName ?? undefined)
     if (!res.ok) {
       const fallbackStmt = `EXPLAIN ${sqlToRun};`
-      res = await window.electronAPI!.pg.query(connId, fallbackStmt, tab.databaseName ?? undefined)
+      res = await dbIpc(connId).query(connId, fallbackStmt, tab.databaseName ?? undefined)
     }
 
     const collected: QueryResult[] = []
@@ -3591,16 +3757,18 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
 
     onChange(tab.id, { running: true, results: [] })
 
-    const res = await window.electronAPI!.pg.query(connId, tab.sql, tab.databaseName ?? undefined)
+    const res = await dbIpc(connId).query(connId, tab.sql, tab.databaseName ?? undefined)
     const collected: QueryResult[] = []
     if (res.ok) {
       collected.push({ fields: res.fields ?? [], rows: res.rows ?? [], rowCount: res.rowCount ?? null, ms: res.ms ?? 0, statement: tab.sql })
       onChange(tab.id, { running: false, results: collected, originalSql: tab.sql })
+      if (tab.databaseName) onAfterRun?.(tab, true)
     } else {
       collected.push({ fields: [], rows: [], rowCount: null, ms: 0, error: res.error, statement: tab.sql })
       onChange(tab.id, { running: false, results: collected })
+      onAfterRun?.(tab, false)
     }
-  }, [tab, connections, onChange])
+  }, [tab, connections, onChange, onAfterRun])
 
   const handleSave = useCallback(() => {
     if (tab.kind === 'design') {
@@ -3630,7 +3798,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
   useEffect(() => {
     if (!isActive) return
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault()
         handleSaveRef.current()
       }
@@ -3656,6 +3824,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
   const boundDb = boundConn?.databases.find(d => d.name === tab.databaseName)
   const availableSchemas = boundDb?.schemas ?? []
   const isFunctionChanged = tab.isFunction && tab.sql !== tab.originalSql
+  const isQueryChanged = !tab.isFunction && tab.kind === 'query' && tab.originalSql !== undefined && tab.sql !== tab.originalSql && tab.sql.trim() !== ''
   const canRun = !tab.running && !!boundConn && !!tab.databaseName && (!tab.isFunction || !isFunctionChanged)
   const canSave = tab.isFunction
     ? (isFunctionChanged && !!boundConn && !!tab.databaseName)
@@ -3909,7 +4078,7 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
 
       for (const stmt of statements) {
         if (!stmt.trim()) continue
-        const res = await window.electronAPI!.pg.query(connId, stmt, tab.databaseName)
+        const res = await dbIpc(connId).query(connId, stmt, tab.databaseName)
         if (!res.ok) {
           ok = false
           errMsg = res.error || 'Failed to execute schema changes.'
@@ -4548,8 +4717,9 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
                 </pre>
 
                 {designError && (
-                  <div className="p-3 rounded-lg border border-destructive/20 bg-destructive/10 text-xs text-destructive leading-normal">
-                    <strong>Execution Error:</strong> {designError}
+                  <div className="flex items-start gap-2 p-3 rounded-lg border border-red-500/30 bg-red-950/60 text-xs text-red-300 leading-normal">
+                    <X className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span><strong>Execution Error:</strong> {designError}</span>
                   </div>
                 )}
               </div>
@@ -4741,6 +4911,28 @@ WHERE event_object_schema = '${schema.replace(/'/g, "''")}' AND event_object_tab
         </div>
       )}
 
+      {isQueryChanged && (
+        <div className="flex items-center justify-between px-3 h-8 border-b border-amber-500/30 bg-amber-500/10 shrink-0">
+          <span className="text-xs text-amber-400 font-medium">Unsaved changes</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onChange(tab.id, { sql: tab.originalSql ?? '' })}
+              className="px-2.5 h-5 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              onClick={() => onSave(tab)}
+              disabled={!canSave}
+              className="flex items-center gap-1.5 px-2.5 h-5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              <Save className="h-3 w-3" />
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
       <ResizablePanelGroup direction="vertical" className="flex-1">
         <ResizablePanel defaultSize={50} minSize={20}>
           <div className="flex flex-col h-full" style={{ textAlign: sqlAlign }}>
@@ -4854,6 +5046,7 @@ function persistSavedQueries(qs: SavedQuery[]) {
 
 interface PersistedConnection {
   id: string
+  dbType: 'postgres' | 'mysql'
   label: string
   name: string
   host: string
@@ -4919,7 +5112,7 @@ function loadPersistedConnections(): PersistedConnection[] {
 function savePersistedConnections(conns: DbConnection[]) {
   try {
     const data: PersistedConnection[] = conns.map(c => ({
-      id: c.id, label: c.label, name: c.name, host: c.host, port: c.port,
+      id: c.id, dbType: c.dbType, label: c.label, name: c.name, host: c.host, port: c.port,
       database: c.database, user: c.user, password: c.password, ssl: c.ssl,
       vpnConfigPath: c.vpnConfigPath, vpnUsername: c.vpnUsername, vpnPassword: c.vpnPassword,
     }))
@@ -4938,7 +5131,7 @@ function loadPersistedTabs(): { tabs: QueryTab[]; meta: PersistedTabsMeta } | nu
       ...t,
       results: [],
       running: false,
-      originalSql: t.originalSql ?? (t.isFunction ? t.sql : undefined),
+      originalSql: t.originalSql ?? t.sql,
     }))
     return { tabs, meta }
   } catch { return null }
@@ -4988,7 +5181,7 @@ function savePersistedTabs(
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function makeTab(n: number, connectionId: string | null, databaseName: string | null = null): QueryTab {
-  return { id: generateId(), kind: 'query', title: `Query ${n}`, sql: '', results: [], running: false, connectionId, databaseName }
+  return { id: generateId(), kind: 'query', title: `Query ${n}`, sql: '', results: [], running: false, connectionId, databaseName, originalSql: '' }
 }
 
 const TABLE_PAGE_SIZE = 200
@@ -5064,15 +5257,13 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   const [unsavedCloseTab, setUnsavedCloseTab] = useState<QueryTab | null>(null)
 
   const newQuery = useCallback(() => {
-    setTabCounter(prevCounter => {
-      const dbName = activeConnId ? (activeDbPerConn[activeConnId] ?? null) : null
-      const schemaName = activeConnId && dbName ? (activeSchemaPerDb[`${activeConnId}::${dbName}`] ?? undefined) : undefined
-      const tab: QueryTab = { ...makeTab(prevCounter, activeConnId, dbName), schemaName }
-      setTabs(prev => [...prev, tab])
-      setActiveTabId(tab.id)
-      return prevCounter + 1
-    })
-  }, [activeConnId, activeDbPerConn, activeSchemaPerDb])
+    const dbName = activeConnId ? (activeDbPerConn[activeConnId] ?? null) : null
+    const schemaName = activeConnId && dbName ? (activeSchemaPerDb[`${activeConnId}::${dbName}`] ?? undefined) : undefined
+    const tab: QueryTab = { ...makeTab(tabCounter, activeConnId, dbName), schemaName }
+    setTabs(prev => [...prev, tab])
+    setActiveTabId(tab.id)
+    setTabCounter(n => n + 1)
+  }, [tabCounter, activeConnId, activeDbPerConn, activeSchemaPerDb])
 
   const handleSaveFunction = useCallback(async (tab: QueryTab) => {
     const connId = tab.connectionId ?? connections.find(c => c.status === 'connected')?.id
@@ -5080,7 +5271,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
 
     setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, running: true, results: [] } : t))
 
-    const res = await window.electronAPI!.pg.query(connId, tab.sql, tab.databaseName ?? undefined)
+    const res = await dbIpc(connId).query(connId, tab.sql, tab.databaseName ?? undefined)
     const collected: QueryResult[] = []
     if (res.ok) {
       collected.push({ fields: res.fields ?? [], rows: res.rows ?? [], rowCount: res.rowCount ?? null, ms: res.ms ?? 0, statement: tab.sql })
@@ -5099,7 +5290,8 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       if (tab) {
         const isFuncChanged = tab.isFunction && tab.sql !== tab.originalSql
         const isDesignChanged = tab.kind === 'design' && isTableDesignChanged(tab)
-        if (isFuncChanged || isDesignChanged) {
+        const isQueryChanged = !tab.isFunction && tab.kind === 'query' && tab.originalSql !== undefined && tab.sql !== tab.originalSql && tab.sql.trim() !== ''
+        if (isFuncChanged || isDesignChanged || isQueryChanged) {
           setUnsavedCloseTab(tab)
           return prev
         }
@@ -5154,13 +5346,13 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       // We only execute here in standalone web/browser mode to avoid double-firing.
       if (window.electronAPI) return
 
-      if (e.ctrlKey && (e.key === 'w' || e.key === 'W')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'w' || e.key === 'W')) {
         e.preventDefault()
         e.stopPropagation()
         if (activeTabId) {
           closeTab(activeTabId)
         }
-      } else if (e.ctrlKey && (e.key === 't' || e.key === 'T')) {
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 't' || e.key === 'T')) {
         e.preventDefault()
         e.stopPropagation()
         newQuery()
@@ -5203,16 +5395,17 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     const saved = loadPersistedConnections()
     if (!saved.length) return
-    const restored: DbConnection[] = saved.map(s => ({ ...s, label: s.label ?? '', vpnConfigPath: s.vpnConfigPath, vpnUsername: s.vpnUsername, vpnPassword: s.vpnPassword, status: 'connecting' as const, databases: [] }))
+    const restored: DbConnection[] = saved.map(s => ({ ...s, dbType: s.dbType ?? 'postgres', label: s.label ?? '', status: 'connecting' as const, databases: [] }))
     setConnections(restored)
     setActiveConnId(prev => prev ?? restored[0].id)
     saved.forEach(async s => {
-      const res = await window.electronAPI!.pg.connect({ id: s.id, host: s.host, port: s.port, database: s.database, user: s.user, password: s.password, ssl: s.ssl, vpnConfigPath: s.vpnConfigPath, vpnUsername: s.vpnUsername, vpnPassword: s.vpnPassword })
+      const ipc = (s.dbType ?? 'postgres') === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+      const res = await ipc.connect({ id: s.id, host: s.host, port: s.port, database: s.database, user: s.user, password: s.password, ssl: s.ssl, vpnConfigPath: s.vpnConfigPath, vpnUsername: s.vpnUsername, vpnPassword: s.vpnPassword })
       if (!res.ok) {
         setConnections(prev => prev.map(c => c.id === s.id ? { ...c, status: 'error', errorMsg: res.error } : c))
         return
       }
-      const dbRes = await window.electronAPI!.pg.introspect(s.id)
+      const dbRes = await ipc.introspect(s.id)
       if (!dbRes.ok) {
         setConnections(prev => prev.map(c => c.id === s.id ? { ...c, status: 'error', errorMsg: dbRes.error } : c))
         return
@@ -5222,16 +5415,15 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
         name, open: wasOpenDbs.includes(name), loading: wasOpenDbs.includes(name), schemas: [],
       }))
       setConnections(prev => prev.map(c => c.id === s.id ? { ...c, status: 'connected', databases } : c))
-      // Re-introspect previously open databases to restore their schemas
       for (const dbName of wasOpenDbs) {
-        const schemaRes = await window.electronAPI!.pg.introspectDb(s.id, dbName)
+        const schemaRes = await ipc.introspectDb(s.id, dbName)
         if (!schemaRes.ok) {
           setConnections(prev => prev.map(c => c.id !== s.id ? c : {
             ...c, databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false } : d),
           }))
           continue
         }
-        const schemas = buildSchemaEntries(schemaRes.tables, schemaRes.functions)
+        const schemas = buildSchemaEntries(schemaRes.tables, schemaRes.functions, schemaRes.enums, schemaRes.types)
         setConnections(prev => prev.map(c => c.id !== s.id ? c : {
           ...c, databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false, schemas } : d),
         }))
@@ -5240,23 +5432,30 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Pick the right IPC channel based on connection type
+  const dbIpc = useCallback((connId: string) => {
+    const conn = connections.find(c => c.id === connId)
+    return conn?.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+  }, [connections])
+
   // After connecting, load the list of databases
   const introspect = useCallback(async (connId: string) => {
-    const res = await window.electronAPI!.pg.introspect(connId)
+    const res = await dbIpc(connId).introspect(connId)
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'error', errorMsg: res.error } : c))
       return
     }
     const databases: DbDatabase[] = (res.databases ?? []).map(name => ({ name, open: false, loading: false, schemas: [] }))
     setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'connected', databases } : c))
-  }, [])
+  }, [dbIpc])
 
   // When a database row is expanded, lazy-load its schemas/tables
   const handleToggleDb = useCallback(async (connId: string, dbName: string) => {
-    // Read current state to decide what to do, without closing over `connections`
     let needsLoad = false
+    let connDbType = 'postgres'
     setConnections(prev => {
       const conn = prev.find(c => c.id === connId)
+      connDbType = conn?.dbType ?? 'postgres'
       const db = conn?.databases.find(d => d.name === dbName)
       if (!db) return prev
       if (db.schemas.length > 0 || db.open) {
@@ -5274,7 +5473,8 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
 
     if (!needsLoad) return
 
-    const res = await window.electronAPI!.pg.introspectDb(connId, dbName)
+    const ipc = connDbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+    const res = await ipc.introspectDb(connId, dbName)
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id !== connId ? c : {
         ...c,
@@ -5283,7 +5483,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       return
     }
 
-    const schemas = buildSchemaEntries(res.tables, res.functions)
+    const schemas = buildSchemaEntries(res.tables, res.functions, res.enums, res.types)
     setConnections(prev => prev.map(c => c.id !== connId ? c : {
       ...c,
       databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false, schemas } : d),
@@ -5296,7 +5496,8 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
     setConnections(prev => [...prev, newConn])
     setActiveConnId(id)
 
-    const res = await window.electronAPI!.pg.connect({ id, ...opts, vpnConfigPath: opts.vpnConfigPath })
+    const ipc = opts.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+    const res = await ipc.connect({ id, ...opts })
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id === id ? { ...c, status: 'error', errorMsg: res.error } : c))
       throw new Error(res.error)
@@ -5316,7 +5517,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       databases: c.databases.map(d => d.name === dbName ? { ...d, loading: true } : d),
     }))
 
-    const res = await window.electronAPI!.pg.introspectDb(connId, dbName)
+    const res = await dbIpc(connId).introspectDb(connId, dbName)
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id !== connId ? c : {
         ...c,
@@ -5325,18 +5526,16 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       return
     }
 
-    const schemas = buildSchemaEntries(res.tables, res.functions)
+    const schemas = buildSchemaEntries(res.tables, res.functions, res.enums, res.types)
     setConnections(prev => prev.map(c => c.id !== connId ? c : {
       ...c,
       databases: c.databases.map(d => d.name === dbName ? { ...d, open: true, loading: false, schemas } : d),
     }))
-  }, [])
+  }, [dbIpc])
 
   const handleSaveDesign = useCallback(async (tab: QueryTab): Promise<boolean> => {
     const ddl = generateTableAlterSql(tab)
-    if (ddl.trim() === '') {
-      return true
-    }
+    if (ddl.trim() === '') return true
 
     const connId = tab.connectionId ?? connections.find(c => c.status === 'connected')?.id
     if (!connId || !tab.databaseName) return false
@@ -5347,7 +5546,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
 
     for (const stmt of statements) {
       if (!stmt.trim()) continue
-      const res = await window.electronAPI!.pg.query(connId, stmt, tab.databaseName)
+      const res = await dbIpc(connId).query(connId, stmt, tab.databaseName)
       if (!res.ok) {
         ok = false
         errMsg = res.error || 'Failed to execute schema changes.'
@@ -5362,7 +5561,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
       alert(`Failed to save table designer changes:\n\n${errMsg}`)
       return false
     }
-  }, [connections, handleRefreshDb])
+  }, [connections, dbIpc, handleRefreshDb])
 
   const toggleSchema = useCallback((connId: string, dbName: string, schemaName: string) => {
     setConnections(prev => prev.map(c => c.id !== connId ? c : {
@@ -5375,22 +5574,23 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   }, [])
 
   const handleDisconnect = useCallback(async (connId: string) => {
-    await window.electronAPI!.pg.disconnect(connId)
+    await dbIpc(connId).disconnect(connId)
     setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'disconnected', databases: [] } : c))
-  }, [])
+  }, [dbIpc])
 
   const handleReconnect = useCallback(async (connId: string) => {
-    type ConnData = Pick<DbConnection, 'host' | 'port' | 'database' | 'user' | 'password' | 'ssl' | 'vpnConfigPath' | 'vpnUsername' | 'vpnPassword'>
+    type ConnData = Pick<DbConnection, 'dbType' | 'host' | 'port' | 'database' | 'user' | 'password' | 'ssl' | 'vpnConfigPath' | 'vpnUsername' | 'vpnPassword'>
     let connData: ConnData | null = null
     setConnections(prev => {
       const conn = prev.find(c => c.id === connId)
       if (!conn) return prev
-      connData = { host: conn.host, port: conn.port, database: conn.database, user: conn.user, password: conn.password, ssl: conn.ssl, vpnConfigPath: conn.vpnConfigPath, vpnUsername: conn.vpnUsername, vpnPassword: conn.vpnPassword }
+      connData = { dbType: conn.dbType, host: conn.host, port: conn.port, database: conn.database, user: conn.user, password: conn.password, ssl: conn.ssl, vpnConfigPath: conn.vpnConfigPath, vpnUsername: conn.vpnUsername, vpnPassword: conn.vpnPassword }
       return prev.map(c => c.id === connId ? { ...c, status: 'connecting', databases: [] } : c)
     })
     if (!connData) return
     const data = connData as ConnData
-    const res = await window.electronAPI!.pg.connect({ id: connId, ...data })
+    const ipc = data.dbType === 'mysql' ? window.electronAPI!.mysql : window.electronAPI!.pg
+    const res = await ipc.connect({ id: connId, ...data })
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'error', errorMsg: res.error } : c))
       return
@@ -5399,19 +5599,19 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
   }, [introspect])
 
   const handleRemove = useCallback(async (connId: string) => {
-    await window.electronAPI!.pg.disconnect(connId)
+    await dbIpc(connId).disconnect(connId)
     setConnections(prev => {
       const next = prev.filter(c => c.id !== connId)
       savePersistedConnections(next)
       return next
     })
     if (activeConnId === connId) setActiveConnId(null)
-  }, [activeConnId])
+  }, [activeConnId, dbIpc])
 
   const handleDisconnectAndEdit = useCallback(async (connId: string) => {
-    await window.electronAPI!.pg.disconnect(connId)
+    await dbIpc(connId).disconnect(connId)
     setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'disconnected', databases: [] } : c))
-  }, [])
+  }, [dbIpc])
 
   const handleEditSave = useCallback(async (connId: string, data: Omit<DbConnection, 'id' | 'status' | 'databases'>) => {
     setConnections(prev => {
@@ -5465,12 +5665,12 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
     setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, running: true, page, sql } : t))
 
     const [res, countRes, colRes] = await Promise.all([
-      window.electronAPI!.pg.query(tab.connectionId, sql, tab.databaseName),
+      dbIpc(tab.connectionId).query(tab.connectionId, sql, tab.databaseName),
       tab.totalRows === undefined
-        ? window.electronAPI!.pg.query(tab.connectionId, `SELECT COUNT(*) AS __count FROM ${tab.schemaName}.${tab.tableName};`, tab.databaseName)
+        ? dbIpc(tab.connectionId).query(tab.connectionId, `SELECT COUNT(*) AS __count FROM ${tab.schemaName}.${tab.tableName};`, tab.databaseName)
         : Promise.resolve(null),
       tab.columnTypes === undefined
-        ? window.electronAPI!.pg.query(tab.connectionId, `SELECT column_name, udt_name FROM information_schema.columns WHERE table_schema = '${tab.schemaName}' AND table_name = '${tab.tableName}' ORDER BY ordinal_position;`, tab.databaseName)
+        ? dbIpc(tab.connectionId).query(tab.connectionId, `SELECT column_name, udt_name FROM information_schema.columns WHERE table_schema = '${tab.schemaName}' AND table_name = '${tab.tableName}' ORDER BY ordinal_position;`, tab.databaseName)
         : Promise.resolve(null),
     ])
 
@@ -5575,7 +5775,7 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
 
     let definition = `-- Definition for function ${schema}.${functionName}\n`
     try {
-      const res = await window.electronAPI!.pg.query(connId, query, dbName)
+      const res = await dbIpc(connId).query(connId, query, dbName)
       if (res.ok && res.rows && res.rows.length > 0) {
         definition = res.rows.map((row: any) => row.definition).join('\n\n')
       } else {
@@ -5604,6 +5804,102 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
     setTabs(prev => [...prev, newTab])
     setActiveTabId(tabId)
   }, [])
+
+  const handleOpenType = useCallback(async (connId: string, dbName: string, schema: string, typeName: string, typeKind: string) => {
+    const tabTitle = `${schema}.${typeName}`
+    const existing = tabs.find(t => t.kind === 'query' && t.connectionId === connId && t.databaseName === dbName && t.schemaName === schema && t.tableName === `type:${typeName}`)
+    if (existing) { setActiveTabId(existing.id); return }
+
+    const esc = (s: string) => s.replace(/'/g, "''")
+    let definition = `-- Type: ${schema}.${typeName} (${typeKind})\n`
+
+    try {
+      let query = ''
+      if (typeKind === 'composite') {
+        query = `SELECT a.attname AS column_name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type
+FROM pg_type t
+JOIN pg_namespace n ON t.typnamespace = n.oid
+JOIN pg_class c ON c.oid = t.typrelid
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+WHERE n.nspname = '${esc(schema)}' AND t.typname = '${esc(typeName)}'
+ORDER BY a.attnum;`
+        const res = await dbIpc(connId).query(connId, query, dbName)
+        if (res.ok && res.rows?.length) {
+          const cols = res.rows.map((r: any) => `    ${r.column_name} ${r.data_type}`).join(',\n')
+          definition = `CREATE TYPE ${schema}.${typeName} AS (\n${cols}\n);`
+        } else {
+          definition += `-- (Could not retrieve definition${res.error ? ': ' + res.error : ''})\n`
+        }
+      } else if (typeKind === 'domain') {
+        query = `SELECT pg_catalog.format_type(t.typbasetype, t.typtypmod) AS base_type,
+       t.typnotnull AS not_null,
+       t.typdefault AS default_val,
+       pg_catalog.array_to_string(ARRAY(
+         SELECT pg_catalog.pg_get_constraintdef(con.oid)
+         FROM pg_catalog.pg_constraint con
+         WHERE con.contypid = t.oid
+       ), ', ') AS check_constraints
+FROM pg_type t
+JOIN pg_namespace n ON t.typnamespace = n.oid
+WHERE n.nspname = '${esc(schema)}' AND t.typname = '${esc(typeName)}';`
+        const res = await dbIpc(connId).query(connId, query, dbName)
+        if (res.ok && res.rows?.length) {
+          const r = res.rows[0]
+          let def = `CREATE DOMAIN ${schema}.${typeName} AS ${r.base_type}`
+          if (r.default_val) def += `\n    DEFAULT ${r.default_val}`
+          if (r.not_null) def += `\n    NOT NULL`
+          if (r.check_constraints) def += `\n    ${r.check_constraints}`
+          definition = def + ';'
+        } else {
+          definition += `-- (Could not retrieve definition${res.error ? ': ' + res.error : ''})\n`
+        }
+      } else if (typeKind === 'range') {
+        query = `SELECT pg_catalog.format_type(r.rngsubtype, NULL) AS subtype,
+       opc.opcname AS subtype_opclass,
+       col.collname AS collation,
+       COALESCE(cf.proname, '') AS canonical,
+       COALESCE(df.proname, '') AS subtype_diff
+FROM pg_range r
+JOIN pg_type t ON t.oid = r.rngtypid
+JOIN pg_namespace n ON t.typnamespace = n.oid
+LEFT JOIN pg_opclass opc ON opc.oid = r.rngsubopc
+LEFT JOIN pg_collation col ON col.oid = r.rngcollation
+LEFT JOIN pg_proc cf ON cf.oid = r.rngcanonical
+LEFT JOIN pg_proc df ON df.oid = r.rngsubdiff
+WHERE n.nspname = '${esc(schema)}' AND t.typname = '${esc(typeName)}';`
+        const res = await dbIpc(connId).query(connId, query, dbName)
+        if (res.ok && res.rows?.length) {
+          const r = res.rows[0]
+          const opts: string[] = [`SUBTYPE = ${r.subtype}`]
+          if (r.subtype_opclass) opts.push(`SUBTYPE_OPCLASS = ${r.subtype_opclass}`)
+          if (r.collation) opts.push(`COLLATION = ${r.collation}`)
+          if (r.canonical) opts.push(`CANONICAL = ${r.canonical}`)
+          if (r.subtype_diff) opts.push(`SUBTYPE_DIFF = ${r.subtype_diff}`)
+          definition = `CREATE TYPE ${schema}.${typeName} AS RANGE (\n    ${opts.join(',\n    ')}\n);`
+        } else {
+          definition += `-- (Could not retrieve definition${res.error ? ': ' + res.error : ''})\n`
+        }
+      }
+    } catch (err: any) {
+      definition += `-- (Error fetching definition: ${err.message || String(err)})\n`
+    }
+
+    const tabId = generateId()
+    const newTab: QueryTab = {
+      id: tabId,
+      kind: 'query',
+      title: tabTitle,
+      sql: definition,
+      results: [],
+      running: false,
+      connectionId: connId,
+      databaseName: dbName,
+      schemaName: schema,
+      tableName: `type:${typeName}`,
+    }
+    setTabs(prev => [...prev, newTab])
+    setActiveTabId(tabId)
+  }, [tabs])
 
   const commitSaveQuery = useCallback((tab: QueryTab, name: string) => {
     setSavedQueries(prev => {
@@ -5717,6 +6013,7 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
             onOpenTable={handleOpenTable}
             onOpenTableDesign={handleOpenTableDesign}
             onOpenFunction={handleOpenFunction}
+            onOpenType={handleOpenType}
             activeDbPerConn={activeDbPerConn}
             activeSchemaPerDb={activeSchemaPerDb}
             openConns={openConns}
@@ -5750,6 +6047,7 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
                 onOpenTable={handleOpenTable}
                 onOpenTableDesign={handleOpenTableDesign}
                 onRefreshDb={handleRefreshDb}
+                onAfterRun={(t, ok) => { if (ok && t.connectionId && t.databaseName) handleRefreshDb(t.connectionId, t.databaseName) }}
                 isSaved={savedQueries.some(q => q.id === activeTab.id)}
                 isActive={isActive}
                 runTrigger={runTrigger}
@@ -5829,7 +6127,7 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
             </div>
             
             <div className="p-5 text-left text-sm text-muted-foreground">
-              You have unsaved changes in this function. Do you want to save them before closing?
+              You have unsaved changes. Do you want to save them before closing?
             </div>
 
             <div className="flex items-center justify-end gap-2 px-5 py-3 bg-muted/10 border-t border-border">
@@ -5853,7 +6151,7 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
                     return next
                   })
                 }}
-                className="px-3 py-1.5 rounded text-xs border border-border text-red-400 hover:bg-red-500/10 transition-colors"
+                className="px-3 py-1.5 rounded text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
               >
                 Discard
               </button>
@@ -5861,9 +6159,15 @@ WHERE n.nspname = '${escapedSchema}' AND p.proname = '${escapedFn}';`
                 onClick={async () => {
                   const tab = unsavedCloseTab
                   setUnsavedCloseTab(null)
-                  const success = tab.kind === 'design'
-                    ? await handleSaveDesign(tab)
-                    : await handleSaveFunction(tab)
+                  let success = false
+                  if (tab.kind === 'design') {
+                    success = await handleSaveDesign(tab)
+                  } else if (tab.isFunction) {
+                    success = await handleSaveFunction(tab)
+                  } else {
+                    handleSaveQuery(tab)
+                    success = true
+                  }
                   if (success) {
                     setTabs(prev => {
                       const next = prev.filter(t => t.id !== tab.id)

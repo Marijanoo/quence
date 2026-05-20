@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
+  setIcon: (mode: string) => ipcRenderer.send('window-set-icon', mode),
   zoomIn: () => ipcRenderer.send('window-zoom-in'),
   zoomOut: () => ipcRenderer.send('window-zoom-out'),
   wsConnect: (socketId: string, url: string, headers?: Record<string, string>, protocol?: string) =>
@@ -119,7 +120,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   pty: {
-    create:  (id: string, cols: number, rows: number) => ipcRenderer.invoke('pty:create', { id, cols, rows }),
+    create:  (id: string, cols: number, rows: number, cwd?: string) => ipcRenderer.invoke('pty:create', { id, cols, rows, cwd }),
     ready:   (id: string) => ipcRenderer.send('pty:ready', { id }),
     write:   (id: string, data: string) => ipcRenderer.send('pty:write', { id, data }),
     line:    (id: string, line: string) => ipcRenderer.send('pty:line', { id, line }),
@@ -130,6 +131,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onExit:  (id: string, cb: () => void) => ipcRenderer.on(`pty:exit:${id}`, cb),
     offData: (id: string) => ipcRenderer.removeAllListeners(`pty:data:${id}`),
     offExit: (id: string) => ipcRenderer.removeAllListeners(`pty:exit:${id}`),
+    stats:   (ids: string[]) => ipcRenderer.invoke('pty:stats', { ids }),
   },
   pg: {
     connect:         (opts: any) => ipcRenderer.invoke('pg:connect', opts),
@@ -138,5 +140,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     introspect:      (id: string) => ipcRenderer.invoke('pg:introspect', { id }),
     introspectDb:    (id: string, database: string) => ipcRenderer.invoke('pg:introspect-db', { id, database }),
     selectOvpnFile:  () => ipcRenderer.invoke('pg:select-ovpn-file'),
+  },
+
+  mysql: {
+    connect:      (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string }) => ipcRenderer.invoke('mysql:connect', opts),
+    disconnect:   (id: string) => ipcRenderer.invoke('mysql:disconnect', { id }),
+    query:        (id: string, sql: string, database?: string) => ipcRenderer.invoke('mysql:query', { id, sql, database }),
+    introspect:   (id: string) => ipcRenderer.invoke('mysql:introspect', { id }),
+    introspectDb: (id: string, database: string) => ipcRenderer.invoke('mysql:introspect-db', { id, database }),
   },
 })

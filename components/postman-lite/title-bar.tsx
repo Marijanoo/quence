@@ -35,6 +35,7 @@ interface TitleBarProps {
   canSave?: boolean
   onInviteAccepted?: (workspaceId: string) => void
   onRefreshWorkspaces?: () => Promise<unknown>
+  terminalCount?: number
 }
 
 function Sep() {
@@ -60,7 +61,7 @@ function TitleBtn({
       title={title}
       disabled={disabled}
       className={cn(
-        'flex items-center gap-1.5 px-2 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none text-xs',
+        'flex items-center gap-1.5 px-2 h-6 self-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none text-xs',
         className
       )}
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -312,6 +313,7 @@ export function TitleBar({
   canSave,
   onInviteAccepted,
   onRefreshWorkspaces,
+  terminalCount,
 }: TitleBarProps) {
   const [isElectron, setIsElectron] = useState(false)
   const { state, logout } = useAuth()
@@ -347,12 +349,18 @@ export function TitleBar({
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         title={`Switch to ${appMode === 'api' ? 'Database' : 'API'} mode`}
       >
-        <Image src="/logo.png" alt="Quence" width={14} height={14} className="shrink-0" />
+        <Image
+          src={appMode === 'database' ? '/QuenceDB.png' : appMode === 'terminal' ? '/QuenceTN.png' : '/logo.png'}
+          alt="Quence"
+          width={14}
+          height={14}
+          className="shrink-0"
+        />
         {appMode === 'api'
           ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-foreground">API</span></>
           : appMode === 'database'
           ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-blue-400">DB</span></>
-          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-green-400">Terminal</span></>
+          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-green-400">TN</span></>
         }
       </button>
 
@@ -366,6 +374,11 @@ export function TitleBar({
       >
         <TerminalSquare className="h-3.5 w-3.5" />
         Terminal
+        {terminalCount != null && terminalCount > 0 && (
+          <span className="ml-0.5 text-[10px] leading-none px-1 rounded bg-muted text-muted-foreground" style={{ lineHeight: '16px' }}>
+            {terminalCount}
+          </span>
+        )}
       </TitleBtn>
 
       <Sep />
