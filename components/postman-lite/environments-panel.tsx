@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { generateId } from '@/lib/utils'
 import type { Environment, EnvironmentVariable } from '@/lib/db/types'
 import { Button } from '@/components/ui/button'
@@ -65,6 +65,30 @@ export function EnvironmentsPanel({
   const [selectedEnv, setSelectedEnv] = useState<Environment | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  // Local variable state for debouncing key/value edits
+  const [localVars, setLocalVars] = useState<Record<string, EnvironmentVariable[]>>({})
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  // Evict localVars entries when the canonical variable list changes from outside
+  // (e.g. a variable was deleted by another component or a re-fetch arrived).
+  // We compare IDs only — if the set changed, our local copy is stale.
+  useEffect(() => {
+    setLocalVars(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const env of environments) {
+        const local = next[env.id]
+        if (!local) continue
+        const canonicalIds = env.variables.map(v => v.id).join(',')
+        const localIds = local.map(v => v.id).join(',')
+        if (canonicalIds !== localIds) {
+          delete next[env.id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [environments])
 
   const toggleEnv = (id: string) => {
     const newExpanded = new Set(expandedEnvs)
@@ -207,13 +231,11 @@ export function EnvironmentsPanel({
   }
 
   const addVariable = (envId: string, variables: EnvironmentVariable[]) => {
-    const newVar: EnvironmentVariable = {
-      id: generateId(),
-      key: '',
-      value: '',
-      enabled: true,
-    }
-    onUpdateEnvironment(envId, { variables: [...variables, newVar] })
+    const newVar: EnvironmentVariable = { id: generateId(), key: '', value: '', enabled: true }
+    const updated = [...variables, newVar]
+    clearTimeout(debounceTimers.current[envId])
+    setLocalVars(prev => ({ ...prev, [envId]: updated }))
+    onUpdateEnvironment(envId, { variables: updated })
   }
 
   const updateVariable = (
@@ -221,16 +243,34 @@ export function EnvironmentsPanel({
     variables: EnvironmentVariable[],
     varId: string,
     field: keyof EnvironmentVariable,
-    value: string | boolean
+    value: string | boolean,
+    debounce = false
   ) => {
     const updated = variables.map((v) =>
       v.id === varId ? { ...v, [field]: value } : v
     )
-    onUpdateEnvironment(envId, { variables: updated })
+    if (debounce) {
+      setLocalVars(prev => ({ ...prev, [envId]: updated }))
+      clearTimeout(debounceTimers.current[envId])
+      debounceTimers.current[envId] = setTimeout(() => {
+        onUpdateEnvironment(envId, { variables: updated })
+        setLocalVars(prev => {
+          const next = { ...prev }
+          delete next[envId]
+          return next
+        })
+      }, 400)
+    } else {
+      setLocalVars(prev => ({ ...prev, [envId]: updated }))
+      onUpdateEnvironment(envId, { variables: updated })
+    }
   }
 
   const deleteVariable = (envId: string, variables: EnvironmentVariable[], varId: string) => {
-    onUpdateEnvironment(envId, { variables: variables.filter((v) => v.id !== varId) })
+    const updated = variables.filter((v) => v.id !== varId)
+    clearTimeout(debounceTimers.current[envId])
+    setLocalVars(prev => ({ ...prev, [envId]: updated }))
+    onUpdateEnvironment(envId, { variables: updated })
   }
 
   return (
@@ -352,19 +392,19 @@ export function EnvironmentsPanel({
 
                   <CollapsibleContent>
                     <div className="pl-8 pr-2 py-2 space-y-2">
-                      {env.variables.map((variable) => (
+                      {(localVars[env.id] ?? env.variables).map((variable) => (
                         <div key={variable.id} className="flex items-center gap-2">
                           <Checkbox
                             checked={variable.enabled}
                             onCheckedChange={canWrite ? (checked) =>
-                              updateVariable(env.id, env.variables, variable.id, 'enabled', !!checked)
+                              updateVariable(env.id, localVars[env.id] ?? env.variables, variable.id, 'enabled', !!checked)
                             : undefined}
                             disabled={!canWrite}
                           />
                           <Input
                             value={variable.key}
                             onChange={(e) =>
-                              updateVariable(env.id, env.variables, variable.id, 'key', e.target.value)
+                              updateVariable(env.id, localVars[env.id] ?? env.variables, variable.id, 'key', e.target.value, true)
                             }
                             placeholder="Variable"
                             className="h-7 text-xs bg-secondary font-mono"
@@ -373,7 +413,7 @@ export function EnvironmentsPanel({
                           <Input
                             value={variable.value}
                             onChange={(e) =>
-                              updateVariable(env.id, env.variables, variable.id, 'value', e.target.value)
+                              updateVariable(env.id, localVars[env.id] ?? env.variables, variable.id, 'value', e.target.value, true)
                             }
                             placeholder="Value"
                             className="h-7 text-xs bg-secondary font-mono"
@@ -384,7 +424,7 @@ export function EnvironmentsPanel({
                               variant="ghost"
                               size="icon"
                               className="h-6 w-6 shrink-0"
-                              onClick={() => deleteVariable(env.id, env.variables, variable.id)}
+                              onClick={() => deleteVariable(env.id, localVars[env.id] ?? env.variables, variable.id)}
                             >
                               <Trash2 className="h-3 w-3 text-muted-foreground" />
                             </Button>
@@ -396,7 +436,7 @@ export function EnvironmentsPanel({
                           variant="ghost"
                           size="sm"
                           className="text-xs text-muted-foreground"
-                          onClick={() => addVariable(env.id, env.variables)}
+                          onClick={() => addVariable(env.id, localVars[env.id] ?? env.variables)}
                         >
                           <Plus className="h-3 w-3 mr-1" />
                           Add Variable

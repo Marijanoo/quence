@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import { Pool } from 'pg'
 import * as path from 'path'
+import * as fs from 'fs'
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
@@ -27,11 +29,50 @@ if (isProd) {
 
 let mainWindow: BrowserWindow | null = null
 
+function getWindowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json')
+}
+
+function loadWindowState(): { width: number; height: number; x?: number; y?: number; isMaximized?: boolean } {
+  try {
+    const raw = fs.readFileSync(getWindowStatePath(), 'utf-8')
+    return JSON.parse(raw)
+  } catch {
+    return { width: 1200, height: 800 }
+  }
+}
+
+function saveWindowState() {
+  if (!mainWindow) return
+  try {
+    const isMaximized = mainWindow.isMaximized()
+    let bounds: { width: number; height: number; x?: number; y?: number; isMaximized?: boolean } = { width: 1200, height: 800 }
+    try {
+      const raw = fs.readFileSync(getWindowStatePath(), 'utf-8')
+      bounds = JSON.parse(raw)
+    } catch {}
+
+    if (!isMaximized) {
+      const currentBounds = mainWindow.getBounds()
+      bounds.x = currentBounds.x
+      bounds.y = currentBounds.y
+      bounds.width = currentBounds.width
+      bounds.height = currentBounds.height
+    }
+    bounds.isMaximized = isMaximized
+    fs.writeFileSync(getWindowStatePath(), JSON.stringify(bounds))
+  } catch {}
+}
+
 async function createWindow() {
+  const windowState = loadWindowState()
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: windowState.width,
+    height: windowState.height,
+    x: windowState.x,
+    y: windowState.y,
     frame: false,
+    show: false,
     icon: path.join(__dirname, '..', 'public', process.platform === 'win32' ? 'logo.ico' : 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -39,6 +80,11 @@ async function createWindow() {
       contextIsolation: true,
     },
   })
+
+  if (windowState.isMaximized) {
+    mainWindow.maximize()
+  }
+  mainWindow.show()
 
   if (isProd) {
     await mainWindow.loadURL('app://-')
@@ -61,13 +107,23 @@ async function createWindow() {
     )
 
     await mainWindow.loadURL(`http://localhost:${port}`)
-    mainWindow.webContents.openDevTools()
   }
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
     if (input.key === 'F12') {
       if (!isProd) mainWindow!.webContents.toggleDevTools()
       event.preventDefault()
+    } else if (input.control && (input.key === 'r' || input.key === 'R')) {
+      // Block Ctrl+R page reload — renderer handles it as "run query"
+      event.preventDefault()
+      mainWindow!.webContents.send('run-query')
+    } else if (input.control && (input.key === 'w' || input.key === 'W')) {
+      event.preventDefault()
+      mainWindow!.webContents.send('close-active-tab')
+    } else if (input.control && (input.key === 't' || input.key === 'T')) {
+      event.preventDefault()
+      mainWindow!.webContents.send('new-query-tab')
     } else if (input.control && (input.key === '=' || input.key === '+')) {
       const currentZoom = mainWindow!.webContents.getZoomLevel()
       mainWindow!.webContents.setZoomLevel(currentZoom + 0.5)
@@ -82,7 +138,15 @@ async function createWindow() {
     }
   })
 
+  // Block all renderer-initiated reloads (Ctrl+R, Ctrl+Shift+R, F5)
+  mainWindow.webContents.on('will-reload' as any, (event: Electron.Event) => {
+    event.preventDefault()
+  })
+
+  mainWindow.on('resize', saveWindowState)
+  mainWindow.on('move', saveWindowState)
   mainWindow.on('closed', () => {
+    saveWindowState()
     mainWindow = null
   })
 }
@@ -281,7 +345,7 @@ app.on('ready', () => {
 
   ipcMain.handle('make-request', async (_event, options) => {
     try {
-      const { url, method, headers, requestBody, requestId } = options
+      const { url, method, headers, requestBody, formDataEntries, requestId } = options
       const controller = new AbortController()
       if (requestId) activeRequests.set(requestId, controller)
 
@@ -314,8 +378,34 @@ app.on('ready', () => {
       }
 
       // Add body for methods that support it
-      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && requestBody) {
-        fetchOptions.body = requestBody
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        if (formDataEntries && formDataEntries.length > 0) {
+          // Node's native fetch doesn't reliably serialize FormData in Electron,
+          // so we manually build the multipart body.
+          const boundary = `----FormBoundary${Math.random().toString(36).slice(2)}`
+          const parts: Buffer[] = []
+          for (const entry of formDataEntries) {
+            if (entry.fileData) {
+              const bytes = Buffer.from(entry.fileData.base64, 'base64')
+              parts.push(Buffer.from(
+                `--${boundary}\r\nContent-Disposition: form-data; name="${entry.key}"; filename="${entry.fileData.name}"\r\nContent-Type: ${entry.fileData.mimeType}\r\n\r\n`
+              ))
+              parts.push(bytes)
+              parts.push(Buffer.from('\r\n'))
+            } else {
+              parts.push(Buffer.from(
+                `--${boundary}\r\nContent-Disposition: form-data; name="${entry.key}"\r\n\r\n${entry.value}\r\n`
+              ))
+            }
+          }
+          parts.push(Buffer.from(`--${boundary}--\r\n`))
+          const body = Buffer.concat(parts)
+          fetchOptions.body = body as unknown as BodyInit
+          fetchHeaders['Content-Type'] = `multipart/form-data; boundary=${boundary}`
+          fetchHeaders['Content-Length'] = String(body.length)
+        } else if (requestBody) {
+          fetchOptions.body = requestBody
+        }
       }
 
       // Ensure URL has a protocol
@@ -397,6 +487,120 @@ app.on('ready', () => {
         contentType: 'application/json',
         isBinary: false,
       }
+    }
+  })
+
+  // ── Postgres connections ────────────────────────────────────────────────────
+  const pgPools = new Map<string, Pool>()
+
+  ipcMain.handle('pg:connect', async (_e, { id, host, port, database, user, password, ssl }: {
+    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean
+  }) => {
+    try {
+      if (pgPools.has(id)) {
+        await pgPools.get(id)!.end()
+        pgPools.delete(id)
+      }
+      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 15000 })
+      // Test the connection immediately
+      const client = await pool.connect()
+      client.release()
+      pgPools.set(id, pool)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('pg:disconnect', async (_e, { id }: { id: string }) => {
+    try {
+      await pgPools.get(id)?.end()
+      pgPools.delete(id)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // Per-database query pools: key = `${connId}::${database}`
+  const dbQueryPools = new Map<string, Pool>()
+
+  ipcMain.handle('pg:query', async (_e, { id, sql, database }: { id: string; sql: string; database?: string }) => {
+    const basePool = pgPools.get(id)
+    if (!basePool) return { ok: false, error: 'Not connected' }
+    try {
+      let pool = basePool
+      if (database) {
+        const key = `${id}::${database}`
+        if (!dbQueryPools.has(key)) {
+          const opts = (basePool as any).options as { host: string; port: number; user: string; password: string; ssl: any }
+          const p = new Pool({ host: opts.host, port: opts.port, user: opts.user, password: opts.password, database, ssl: opts.ssl, connectionTimeoutMillis: 15000 })
+          dbQueryPools.set(key, p)
+        }
+        pool = dbQueryPools.get(key)!
+      }
+      const start = Date.now()
+      const result = await pool.query(sql)
+      const ms = Date.now() - start
+      return { ok: true, rows: result.rows, fields: result.fields.map(f => f.name), rowCount: result.rowCount, ms }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('pg:introspect', async (_e, { id }: { id: string }) => {
+    const pool = pgPools.get(id)
+    if (!pool) return { ok: false, error: 'Not connected' }
+    try {
+      const dbRes = await pool.query(
+        `SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname`
+      )
+      return { ok: true, databases: dbRes.rows.map((r: { datname: string }) => r.datname) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('pg:introspect-db', async (_e, { id, database }: { id: string; database: string }) => {
+    const basePool = pgPools.get(id)
+    if (!basePool) return { ok: false, error: 'Not connected' }
+    // Get the connection config from the existing pool to open a new one against the target database
+    const opts = (basePool as any).options as { host: string; port: number; user: string; password: string; ssl: any }
+    const dbPool = new Pool({ host: opts.host, port: opts.port, user: opts.user, password: opts.password, database, ssl: opts.ssl, connectionTimeoutMillis: 15000 })
+    try {
+      const [tablesRes, funcsRes] = await Promise.all([
+        dbPool.query(`
+          SELECT 
+            n.nspname AS table_schema,
+            c.relname AS table_name,
+            CASE 
+              WHEN c.relkind = 'r' THEN 'BASE TABLE'
+              WHEN c.relkind = 'v' THEN 'VIEW'
+              WHEN c.relkind = 'm' THEN 'MATERIALIZED VIEW'
+              ELSE 'OTHER'
+            END AS table_type
+          FROM pg_class c
+          JOIN pg_namespace n ON c.relnamespace = n.oid
+          WHERE c.relkind IN ('r', 'v', 'm')
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY table_schema, table_name
+        `),
+        dbPool.query(`
+          SELECT 
+            n.nspname AS routine_schema,
+            p.proname AS routine_name,
+            pg_get_function_arguments(p.oid) AS arguments
+          FROM pg_proc p
+          JOIN pg_namespace n ON p.pronamespace = n.oid
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY routine_schema, routine_name
+        `),
+      ])
+      return { ok: true, tables: tablesRes.rows, functions: funcsRes.rows }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      await dbPool.end()
     }
   })
 })

@@ -9,6 +9,21 @@ async function invoke(channel: string, ...args: any[]) {
 contextBridge.exposeInMainWorld('electronAPI', {
   makeRequest: (options: any) => ipcRenderer.invoke('make-request', options),
   cancelRequest: (requestId: string) => ipcRenderer.send('cancel-request', { requestId }),
+  onRunQuery: (cb: () => void) => {
+    ipcRenderer.removeAllListeners('run-query')
+    ipcRenderer.on('run-query', cb)
+  },
+  offRunQuery: () => ipcRenderer.removeAllListeners('run-query'),
+  onCloseActiveTab: (cb: () => void) => {
+    ipcRenderer.removeAllListeners('close-active-tab')
+    ipcRenderer.on('close-active-tab', cb)
+  },
+  offCloseActiveTab: () => ipcRenderer.removeAllListeners('close-active-tab'),
+  onNewQueryTab: (cb: () => void) => {
+    ipcRenderer.removeAllListeners('new-query-tab')
+    ipcRenderer.on('new-query-tab', cb)
+  },
+  offNewQueryTab: () => ipcRenderer.removeAllListeners('new-query-tab'),
   onUpdateAvailable: (cb: () => void) => ipcRenderer.on('update-available', cb),
   onUpdateProgress: (cb: (percent: number) => void) => ipcRenderer.on('update-progress', (_e, percent) => cb(percent)),
   onUpdateDownloaded: (cb: () => void) => ipcRenderer.on('update-downloaded', cb),
@@ -102,5 +117,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       send:         (invite: any) => invoke('db:invites:send', invite),
       delete:       (id: string) => invoke('db:invites:delete', id),
     },
+  },
+  pg: {
+    connect:      (opts: any) => ipcRenderer.invoke('pg:connect', opts),
+    disconnect:   (id: string) => ipcRenderer.invoke('pg:disconnect', { id }),
+    query:        (id: string, sql: string, database?: string) => ipcRenderer.invoke('pg:query', { id, sql, database }),
+    introspect:   (id: string) => ipcRenderer.invoke('pg:introspect', { id }),
+    introspectDb: (id: string, database: string) => ipcRenderer.invoke('pg:introspect-db', { id, database }),
   },
 })

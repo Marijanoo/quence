@@ -23,6 +23,8 @@ import { useMyInvites, useWorkspaceMembers } from '@/hooks/use-collaboration'
 import type { Workspace, WorkspacePermission } from '@/lib/db/types'
 
 interface TitleBarProps {
+  appMode?: 'api' | 'database'
+  onSwitchMode?: (mode: 'api' | 'database') => void
   workspaceDropdown?: React.ReactNode
   environments?: React.ReactNode
   activeWorkspace?: Workspace | null
@@ -298,6 +300,8 @@ function InviteDropdown({ hook, onUpdateWorkspace, activeWorkspace }: { hook: Wo
 }
 
 export function TitleBar({
+  appMode = 'api',
+  onSwitchMode,
   workspaceDropdown,
   environments,
   activeWorkspace,
@@ -336,11 +340,19 @@ export function TitleBar({
       className="flex items-stretch h-8 bg-card border-b border-border select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Logo */}
-      <div className="flex items-center gap-1.5 px-3 shrink-0 self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      {/* App mode toggle */}
+      <button
+        onClick={() => onSwitchMode?.(appMode === 'api' ? 'database' : 'api')}
+        className="flex items-center gap-1.5 px-3 shrink-0 self-center hover:opacity-80 transition-opacity"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        title={`Switch to ${appMode === 'api' ? 'Database' : 'API'} mode`}
+      >
         <Image src="/logo.png" alt="Quence" width={14} height={14} className="shrink-0" />
-        <span className="text-xs font-medium text-muted-foreground">Quence</span>
-      </div>
+        {appMode === 'api'
+          ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-foreground">API</span></>
+          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-blue-400">DB</span></>
+        }
+      </button>
 
       <Sep />
 
