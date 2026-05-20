@@ -165,11 +165,13 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   const [appMode, setAppMode] = useState<'api' | 'database' | 'terminal'>(() => {
     try { return (localStorage.getItem('quence-app-mode') as 'api' | 'database' | 'terminal') || 'api' } catch { return 'api' }
   })
+  const [terminalCount, setTerminalCount] = useState(0)
   const [switchingMode, setSwitchingMode] = useState<'api' | 'database' | 'terminal' | null>(null)
   const switchMode = (mode: 'api' | 'database' | 'terminal') => {
     setSwitchingMode(mode)
     setTimeout(() => { setAppMode(mode); try { localStorage.setItem('quence-app-mode', mode) } catch {} }, 150)
     setTimeout(() => setSwitchingMode(null), 600)
+    window.electronAPI?.setIcon?.(mode)
   }
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   useEffect(() => {
@@ -1331,7 +1333,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode } = kbStateRef.current
       if (appMode !== 'api') return
 
-      if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         if (e.key.toLowerCase() === 's') {
           e.preventDefault();
           if (canWrite) { if (activeSocketTabId) openSaveSocketDialog(); else openSaveDialog(); }
@@ -1646,6 +1648,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           canSave={appMode === 'api' && canWrite && (!!activeTab || !!activeSocketTab)}
           onInviteAccepted={(wsId) => switchWorkspace(wsId)}
           onRefreshWorkspaces={refreshWorkspaces}
+          terminalCount={terminalCount}
         />
         <input
           ref={workspaceImportRef}
@@ -1669,7 +1672,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
         <DatabaseView isActive={appMode === 'database'} />
       </div>
       <div className={appMode === 'terminal' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
-        <TerminalView isActive={appMode === 'terminal'} />
+        <TerminalView isActive={appMode === 'terminal'} onCountChange={setTerminalCount} />
       </div>
       <div className={appMode === 'api' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
       <>
@@ -1859,8 +1862,10 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+      </>
+      </div>
 
-      {/* Bottom bar */}
+      {/* Bottom bar — always visible across all modes */}
       <div className="flex items-center justify-between px-3 h-7 border-t border-border bg-card shrink-0">
         <div className="flex items-center gap-2">
           <button
@@ -1887,80 +1892,80 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           />
         )}
 
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setActiveView('requests')}
-            title="Requests"
-            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              activeView === 'requests'
-                ? 'text-foreground bg-accent/20'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-            }`}
-          >
-            <PanelRight className="h-3.5 w-3.5" />
-            <span>Requests</span>
-          </button>
-          <button
-            onClick={() => setActiveView('sequences')}
-            title="Sequences"
-            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              activeView === 'sequences'
-                ? 'text-foreground bg-accent/20'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-            }`}
-          >
-            <ListOrdered className="h-3.5 w-3.5" />
-            <span>Sequences</span>
-          </button>
-          <button
-            onClick={() => setActiveView('jwt')}
-            title="JWT Decoder"
-            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              activeView === 'jwt'
-                ? 'text-foreground bg-accent/20'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-            }`}
-          >
-            <KeyRound className="h-3.5 w-3.5" />
-            <span>JWT</span>
-          </button>
-          <button
-            onClick={() => setActiveView('json')}
-            title="JSON Formatter"
-            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              activeView === 'json'
-                ? 'text-foreground bg-accent/20'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-            }`}
-          >
-            <Braces className="h-3.5 w-3.5" />
-            <span>JSON</span>
-          </button>
-          <button
-            onClick={() => setActiveView('diff')}
-            title="Text Compare"
-            className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
-              activeView === 'diff'
-                ? 'text-foreground bg-accent/20'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
-            }`}
-          >
-            <GitCompare className="h-3.5 w-3.5" />
-            <span>Diff</span>
-          </button>
-          <button
-            onClick={() => setResponseLayout(l => l === 'side' ? 'bottom' : 'side')}
-            title={responseLayout === 'side' ? 'Move response to bottom' : 'Move response to side'}
-            className="flex items-center gap-1.5 px-2 h-5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
-          >
-            {responseLayout === 'side'
-              ? <PanelBottom className="h-3.5 w-3.5" />
-              : <PanelRight className="h-3.5 w-3.5" />}
-            <span>{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
-          </button>
-        </div>
-      </div>
-      </>
+        {appMode === 'api' && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setActiveView('requests')}
+              title="Requests"
+              className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+                activeView === 'requests'
+                  ? 'text-foreground bg-accent/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+              }`}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+              <span>Requests</span>
+            </button>
+            <button
+              onClick={() => setActiveView('sequences')}
+              title="Sequences"
+              className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+                activeView === 'sequences'
+                  ? 'text-foreground bg-accent/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+              }`}
+            >
+              <ListOrdered className="h-3.5 w-3.5" />
+              <span>Sequences</span>
+            </button>
+            <button
+              onClick={() => setActiveView('jwt')}
+              title="JWT Decoder"
+              className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+                activeView === 'jwt'
+                  ? 'text-foreground bg-accent/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+              }`}
+            >
+              <KeyRound className="h-3.5 w-3.5" />
+              <span>JWT</span>
+            </button>
+            <button
+              onClick={() => setActiveView('json')}
+              title="JSON Formatter"
+              className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+                activeView === 'json'
+                  ? 'text-foreground bg-accent/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+              }`}
+            >
+              <Braces className="h-3.5 w-3.5" />
+              <span>JSON</span>
+            </button>
+            <button
+              onClick={() => setActiveView('diff')}
+              title="Text Compare"
+              className={`flex items-center gap-1.5 px-2 h-5 rounded text-xs transition-colors ${
+                activeView === 'diff'
+                  ? 'text-foreground bg-accent/20'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
+              }`}
+            >
+              <GitCompare className="h-3.5 w-3.5" />
+              <span>Diff</span>
+            </button>
+            <button
+              onClick={() => setResponseLayout(l => l === 'side' ? 'bottom' : 'side')}
+              title={responseLayout === 'side' ? 'Move response to bottom' : 'Move response to side'}
+              className="flex items-center gap-1.5 px-2 h-5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+            >
+              {responseLayout === 'side'
+                ? <PanelBottom className="h-3.5 w-3.5" />
+                : <PanelRight className="h-3.5 w-3.5" />}
+              <span>{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Workspace / connectivity strip */}

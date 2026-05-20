@@ -1,9 +1,13 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { Pool } from 'pg'
+import * as mysql from 'mysql2/promise'
 import * as path from 'path'
 import * as fs from 'fs'
 import { spawn, ChildProcess } from 'child_process'
+import * as pty from 'node-pty'
 import * as os from 'os'
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pidusage = require('pidusage') as (pids: number | number[]) => Promise<Record<number, { cpu: number; memory: number }>>
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
@@ -20,6 +24,12 @@ import {
   dbGetWorkspaceState, dbSaveWorkspaceState,
   dbGetInvitesForEmail, dbGetInvitesForWorkspace, dbSendInvite, dbDeleteInvite,
 } from './sqlite-db'
+
+// Swallow EPIPE errors from node-pty ConPTY pipe teardown — these are harmless
+process.on('uncaughtException', (err: any) => {
+  if (err?.code === 'EPIPE') return
+  throw err
+})
 
 const isProd = app.isPackaged || process.env.NODE_ENV === 'production'
 
@@ -116,25 +126,25 @@ async function createWindow() {
     if (input.key === 'F12') {
       if (!isProd) mainWindow!.webContents.toggleDevTools()
       event.preventDefault()
-    } else if (input.control && (input.key === 'r' || input.key === 'R')) {
-      // Block Ctrl+R page reload — renderer handles it as "run query"
+    } else if ((input.control || input.meta) && (input.key === 'r' || input.key === 'R')) {
+      // Block Ctrl/Cmd+R page reload — renderer handles it as "run query"
       event.preventDefault()
       mainWindow!.webContents.send('run-query')
-    } else if (input.control && (input.key === 'w' || input.key === 'W')) {
+    } else if ((input.control || input.meta) && (input.key === 'w' || input.key === 'W')) {
       event.preventDefault()
       mainWindow!.webContents.send('close-active-tab')
-    } else if (input.control && (input.key === 't' || input.key === 'T')) {
+    } else if ((input.control || input.meta) && (input.key === 't' || input.key === 'T')) {
       event.preventDefault()
       mainWindow!.webContents.send('new-query-tab')
-    } else if (input.control && (input.key === '=' || input.key === '+')) {
+    } else if ((input.control || input.meta) && (input.key === '=' || input.key === '+')) {
       const currentZoom = mainWindow!.webContents.getZoomLevel()
       mainWindow!.webContents.setZoomLevel(currentZoom + 0.5)
       event.preventDefault()
-    } else if (input.control && input.key === '-') {
+    } else if ((input.control || input.meta) && input.key === '-') {
       const currentZoom = mainWindow!.webContents.getZoomLevel()
       mainWindow!.webContents.setZoomLevel(currentZoom - 0.5)
       event.preventDefault()
-    } else if (input.control && input.key === '0') {
+    } else if ((input.control || input.meta) && input.key === '0') {
       mainWindow!.webContents.setZoomLevel(0)
       event.preventDefault()
     }
@@ -165,6 +175,15 @@ app.on('ready', () => {
     }
   })
   ipcMain.on('window-close', () => mainWindow?.close())
+  ipcMain.on('window-set-icon', (_e, mode: string) => {
+    if (!mainWindow) return
+    const iconFile = mode === 'database'
+      ? (process.platform === 'win32' ? 'QuenceDB.ico' : 'QuenceDB.png')
+      : mode === 'terminal'
+      ? (process.platform === 'win32' ? 'QuenceTN.ico' : 'QuenceTN.png')
+      : (process.platform === 'win32' ? 'logo.ico' : 'logo.png')
+    try { mainWindow.setIcon(path.join(__dirname, '..', 'public', iconFile)) } catch {}
+  })
   ipcMain.on('window-zoom-in', () => {
     if (!mainWindow) return
     mainWindow.webContents.setZoomLevel(mainWindow.webContents.getZoomLevel() + 0.5)
@@ -620,9 +639,12 @@ app.on('ready', () => {
         await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
       }
 
-      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 15000 })
-      // Test the connection immediately
-      const client = await pool.connect()
+      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 10000 })
+      // Test the connection with an explicit timeout in case TCP opens but server never responds
+      const client = await Promise.race([
+        pool.connect(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 10s')), 10000)),
+      ])
       client.release()
       pgPools.set(id, pool)
       return { ok: true }
@@ -689,12 +711,12 @@ app.on('ready', () => {
     const opts = (basePool as any).options as { host: string; port: number; user: string; password: string; ssl: any }
     const dbPool = new Pool({ host: opts.host, port: opts.port, user: opts.user, password: opts.password, database, ssl: opts.ssl, connectionTimeoutMillis: 15000 })
     try {
-      const [tablesRes, funcsRes] = await Promise.all([
+      const [tablesRes, funcsRes, enumsRes, typesRes] = await Promise.all([
         dbPool.query(`
-          SELECT 
+          SELECT
             n.nspname AS table_schema,
             c.relname AS table_name,
-            CASE 
+            CASE
               WHEN c.relkind = 'r' THEN 'BASE TABLE'
               WHEN c.relkind = 'v' THEN 'VIEW'
               WHEN c.relkind = 'm' THEN 'MATERIALIZED VIEW'
@@ -707,7 +729,7 @@ app.on('ready', () => {
           ORDER BY table_schema, table_name
         `),
         dbPool.query(`
-          SELECT 
+          SELECT
             n.nspname AS routine_schema,
             p.proname AS routine_name,
             pg_get_function_arguments(p.oid) AS arguments
@@ -716,8 +738,36 @@ app.on('ready', () => {
           WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
           ORDER BY routine_schema, routine_name
         `),
+        dbPool.query(`
+          SELECT
+            n.nspname AS schema,
+            t.typname AS name,
+            string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS values
+          FROM pg_type t
+          JOIN pg_namespace n ON t.typnamespace = n.oid
+          JOIN pg_enum e ON e.enumtypid = t.oid
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          GROUP BY n.nspname, t.typname
+          ORDER BY schema, name
+        `),
+        dbPool.query(`
+          SELECT
+            n.nspname AS schema,
+            t.typname AS name,
+            CASE t.typtype
+              WHEN 'c' THEN 'composite'
+              WHEN 'd' THEN 'domain'
+              WHEN 'r' THEN 'range'
+              ELSE 'other'
+            END AS definition
+          FROM pg_type t
+          JOIN pg_namespace n ON t.typnamespace = n.oid
+          WHERE t.typtype IN ('c', 'd', 'r')
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY schema, name
+        `),
       ])
-      return { ok: true, tables: tablesRes.rows, functions: funcsRes.rows }
+      return { ok: true, tables: tablesRes.rows, functions: funcsRes.rows, enums: enumsRes.rows, types: typesRes.rows }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     } finally {
@@ -725,83 +775,271 @@ app.on('ready', () => {
     }
   })
 
-  // ── Terminal ────────────────────────────────────────────────────────────────
-  // Map of terminal id → active shell process
-  const termProcesses = new Map<string, any>()
+  // ── MySQL connections ───────────────────────────────────────────────────────
+  const mysqlPools = new Map<string, mysql.Pool>()
 
-  ipcMain.handle('pty:create', (_e, { id }: { id: string }) => {
-    const send = (data: string) => mainWindow?.webContents.send(`pty:data:${id}`, data)
-    const cwd = os.homedir()
+  ipcMain.handle('mysql:connect', async (_e, { id, host, port, database, user, password, ssl, vpnConfigPath, vpnUsername, vpnPassword }: {
+    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string
+  }) => {
+    try {
+      if (mysqlPools.has(id)) {
+        await mysqlPools.get(id)!.end()
+        mysqlPools.delete(id)
+      }
+      killVpn(id)
+
+      if (vpnConfigPath) {
+        await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
+      }
+
+      const pool = mysql.createPool({
+        host, port, database: database || undefined, user, password,
+        ssl: ssl ? { rejectUnauthorized: false } : undefined,
+        connectTimeout: 10000,
+        waitForConnections: true,
+        connectionLimit: 5,
+      })
+      const conn = await Promise.race([
+        pool.getConnection(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 10s')), 10000)),
+      ])
+      conn.release()
+      mysqlPools.set(id, pool)
+      return { ok: true }
+    } catch (err) {
+      killVpn(id)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('mysql:disconnect', async (_e, { id }: { id: string }) => {
+    try {
+      await mysqlPools.get(id)?.end()
+      mysqlPools.delete(id)
+      killVpn(id)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('mysql:query', async (_e, { id, sql, database }: { id: string; sql: string; database?: string }) => {
+    const pool = mysqlPools.get(id)
+    if (!pool) return { ok: false, error: 'Not connected' }
+    try {
+      const conn = await pool.getConnection()
+      try {
+        if (database) await conn.query(`USE \`${database}\``)
+        const start = Date.now()
+        const [rows, fields] = await conn.query({ sql, rowsAsArray: false }) as [any[], mysql.FieldPacket[]]
+        const ms = Date.now() - start
+        const fieldNames = Array.isArray(fields) ? fields.map((f: any) => f.name) : []
+        const normalizedRows = Array.isArray(rows) ? rows : []
+        return { ok: true, rows: normalizedRows, fields: fieldNames, rowCount: normalizedRows.length, ms }
+      } finally {
+        conn.release()
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('mysql:introspect', async (_e, { id }: { id: string }) => {
+    const pool = mysqlPools.get(id)
+    if (!pool) return { ok: false, error: 'Not connected' }
+    try {
+      const [rows] = await pool.query(`SHOW DATABASES`) as [any[], mysql.FieldPacket[]]
+      const databases = rows.map((r: any) => Object.values(r)[0] as string)
+        .filter(d => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(d))
+      return { ok: true, databases }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('mysql:introspect-db', async (_e, { id, database }: { id: string; database: string }) => {
+    const pool = mysqlPools.get(id)
+    if (!pool) return { ok: false, error: 'Not connected' }
+    try {
+      const conn = await pool.getConnection()
+      try {
+        await conn.query(`USE \`${database}\``)
+        const [[tablesRows], [funcsRows], [enumsRows]] = await Promise.all([
+          conn.query(`
+            SELECT TABLE_NAME AS table_name,
+                   TABLE_TYPE AS table_type
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = ?
+            ORDER BY TABLE_NAME
+          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
+          conn.query(`
+            SELECT ROUTINE_NAME AS routine_name,
+                   ROUTINE_TYPE AS routine_type
+            FROM information_schema.ROUTINES
+            WHERE ROUTINE_SCHEMA = ?
+            ORDER BY ROUTINE_NAME
+          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
+          conn.query(`
+            SELECT COLUMN_NAME AS name,
+                   COLUMN_TYPE AS col_type,
+                   TABLE_NAME  AS table_name
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = ?
+              AND COLUMN_TYPE LIKE 'enum(%)'
+            GROUP BY COLUMN_TYPE, COLUMN_NAME, TABLE_NAME
+            ORDER BY TABLE_NAME, COLUMN_NAME
+          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
+        ])
+
+        // Tables and views — MySQL has no schemas, use database name as schema
+        const tables = (tablesRows as any[]).map(r => ({
+          table_schema: database,
+          table_name: r.table_name,
+          table_type: r.table_type === 'BASE TABLE' ? 'BASE TABLE' : r.table_type === 'VIEW' ? 'VIEW' : 'OTHER',
+        }))
+
+        // Functions and procedures
+        const functions = (funcsRows as any[]).map(r => ({
+          routine_schema: database,
+          routine_name: r.routine_name,
+          arguments: r.routine_type === 'PROCEDURE' ? '(procedure)' : '',
+        }))
+
+        // Enums — MySQL enums are per-column, group by type string
+        const enumMap = new Map<string, string[]>()
+        for (const r of enumsRows as any[]) {
+          const match = /^enum\((.+)\)$/i.exec(r.col_type)
+          if (!match) continue
+          const values = match[1].split(',').map((v: string) => v.replace(/^'|'$/g, '').trim())
+          const key = `${r.table_name}.${r.name}`
+          enumMap.set(key, values)
+        }
+        const enums = [...enumMap.entries()].map(([name, values]) => ({ schema: database, name, values }))
+
+        return { ok: true, tables, functions, enums, types: [] }
+      } finally {
+        conn.release()
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // ── Terminal ────────────────────────────────────────────────────────────────
+  const termProcesses = new Map<string, pty.IPty>()
+  const termAlive = new Map<string, boolean>()
+  const termResizeReady = new Map<string, boolean>()
+
+  function destroyTerm(id: string) {
+    if (!termAlive.get(id)) return
+    termAlive.set(id, false)
+    termResizeReady.delete(id)
+    const proc = termProcesses.get(id)
+    if (proc) {
+      try { proc.kill() } catch {}
+      termProcesses.delete(id)
+    }
+  }
+
+  function sendToTerm(id: string, data: string) {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send(`pty:data:${id}`, data)
+  }
+
+  ipcMain.handle('pty:create', (_e, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
+    // If PTY already exists and is alive, just re-attach (renderer remounted)
+    if (termAlive.get(id) && termProcesses.has(id)) {
+      return { ok: true, reattached: true }
+    }
+
+    // Clean up any dead entry before spawning fresh
+    destroyTerm(id)
 
     const isWin = process.platform === 'win32'
-    const shell = isWin ? 'cmd.exe' : (process.env.SHELL ?? 'bash')
-    const args = isWin ? ['/Q'] : ['-i']
+    const shell = isWin
+      ? (process.env.COMSPEC || 'cmd.exe')
+      : (process.env.SHELL ?? 'bash')
+    const args = isWin ? ['/K'] : []
+    const env = { ...process.env } as Record<string, string>
+    delete env['TERM']
 
+    let proc: pty.IPty
     try {
-      const proc = spawn(shell, args, {
-        cwd,
-        env: { ...process.env, TERM: 'xterm-256color' },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }) as any
-
-      termProcesses.set(id, proc)
-
-      proc.stdout?.on('data', (d: Buffer) => {
-        send(d.toString())
-      })
-
-      proc.stderr?.on('data', (d: Buffer) => {
-        send(d.toString())
-      })
-
-      proc.on('exit', () => {
-        mainWindow?.webContents.send(`pty:exit:${id}`)
-        termProcesses.delete(id)
-      })
-
-      proc.on('error', (err: any) => {
-        send(`\r\nFailed to start terminal: ${err.message}\r\n`)
+      proc = pty.spawn(shell, args, {
+        name: 'xterm-256color',
+        cols: Math.max(cols || 80, 1),
+        rows: Math.max(rows || 24, 1),
+        cwd: cwd || os.homedir(),
+        env,
+        useConpty: true,
       })
     } catch (e: any) {
+      sendToTerm(id, `\r\n\x1b[31m[failed to start terminal: ${e.message}]\x1b[0m\r\n`)
       return { ok: false, error: e.message }
     }
 
-    return { ok: true }
-  })
+    termProcesses.set(id, proc)
+    termAlive.set(id, true)
 
-  ipcMain.on('pty:ready', () => { /* no-op in persistent shell mode */ })
+    // Block resizes for 1s — ConPTY crashes if resized during initialisation
+    setTimeout(() => { if (termAlive.get(id)) termResizeReady.set(id, true) }, 1000)
 
-  ipcMain.on('pty:line', (_e, { id, line }: { id: string; line: string }) => {
-    const proc = termProcesses.get(id)
-    if (proc) {
-      proc.stdin?.write(line + '\n')
-    }
-  })
+    proc.onData(data => {
+      if (!termAlive.get(id)) return
+      sendToTerm(id, data)
+    })
 
-  ipcMain.handle('pty:kill', (_e, { id }: { id: string }) => {
-    const proc = termProcesses.get(id)
-    if (proc) {
-      try {
-        proc.kill()
-      } catch (err) {}
+    proc.onExit(() => {
+      sendToTerm(id, `\r\n\x1b[90m[process exited]\x1b[0m\r\n`)
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send(`pty:exit:${id}`)
+      termAlive.delete(id)
+      termResizeReady.delete(id)
       termProcesses.delete(id)
-    }
+    })
+
     return { ok: true }
   })
 
   ipcMain.on('pty:write', (_e, { id, data }: { id: string; data: string }) => {
-    const proc = termProcesses.get(id)
-    if (proc) {
-      proc.stdin?.write(data)
-    }
+    if (!termAlive.get(id)) return
+    try { termProcesses.get(id)?.write(data) } catch {}
   })
 
-  ipcMain.on('pty:resize', () => { /* no-op without PTY */ })
+  ipcMain.on('pty:resize', (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+    if (!termAlive.get(id) || !termResizeReady.get(id)) return
+    try { termProcesses.get(id)?.resize(Math.max(cols, 1), Math.max(rows, 1)) } catch {}
+  })
+
+  ipcMain.on('pty:ready', () => {})
+
+  ipcMain.handle('pty:kill', (_e, { id }: { id: string }) => {
+    destroyTerm(id)
+    return { ok: true }
+  })
 
   ipcMain.handle('pty:homedir', () => os.homedir())
 
+  ipcMain.handle('pty:stats', async (_e, { ids }: { ids: string[] }) => {
+    const pids = ids.map(id => termProcesses.get(id)?.pid).filter((p): p is number => p != null)
+    if (pids.length === 0) return {}
+    try {
+      const stats = await pidusage(pids)
+      const result: Record<string, { cpu: number; memory: number }> = {}
+      for (const id of ids) {
+        const pid = termProcesses.get(id)?.pid
+        if (pid != null && stats[pid]) {
+          result[id] = { cpu: stats[pid].cpu, memory: stats[pid].memory }
+        }
+      }
+      return result
+    } catch {
+      return {}
+    }
+  })
+
   app.on('will-quit', () => {
-    for (const [id, proc] of termProcesses) {
+    for (const [, proc] of termProcesses) {
       try {
         proc.kill()
       } catch (err) {}
