@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { Plus, Trash2, FileUp, X } from 'lucide-react'
 import type { KeyValuePair } from '@/lib/db/types'
 import { createKeyValuePair } from '@/lib/db/types'
@@ -34,6 +34,8 @@ export function KeyValueEditor({
 }: KeyValueEditorProps) {
   const { variables, updateVariable } = useEnvironmentContext()
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const [localDescriptions, setLocalDescriptions] = useState<Record<string, string>>({})
+  const descTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   const handleAdd = () => {
     onChange([...pairs, createKeyValuePair()])
@@ -203,8 +205,15 @@ export function KeyValueEditor({
 
             {showDescription && (
               <Input
-                value={pair.description || ''}
-                onChange={(e) => handleUpdate(pair.id, 'description', e.target.value)}
+                value={pair.id in localDescriptions ? localDescriptions[pair.id] : (pair.description || '')}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setLocalDescriptions(prev => ({ ...prev, [pair.id]: val }))
+                  clearTimeout(descTimers.current[pair.id])
+                  descTimers.current[pair.id] = setTimeout(() => {
+                    handleUpdate(pair.id, 'description', val)
+                  }, 400)
+                }}
                 placeholder="Description"
                 className="flex-1 h-8 bg-secondary border-border text-sm"
                 readOnly={readOnly}

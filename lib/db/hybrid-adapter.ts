@@ -45,9 +45,9 @@ export class HybridAdapter implements DatabaseAdapter {
     // Look up the workspace in SQLite first (it holds all workspace metadata locally)
     const ws = await this.sqlite.getWorkspaces()
     const found = ws.find(w => w.id === workspaceId)
-    const isShared = found ? (found.members?.length ?? 0) > 0 : false
-    this._sharedCache.set(workspaceId, isShared)
-    return isShared ? this.rest : this.sqlite
+    const isCloud = found ? (found.isSynced === true || (found.members?.length ?? 0) > 0) : false
+    this._sharedCache.set(workspaceId, isCloud)
+    return isCloud ? this.rest : this.sqlite
   }
 
   // Invalidate the cache when workspace membership changes
@@ -209,13 +209,31 @@ export class HybridAdapter implements DatabaseAdapter {
 
   // ── Requests ────────────────────────────────────────────────────────────────
   async getRequests(collectionId?: string): Promise<RequestConfig[]> {
-    if (!collectionId) return this.sqlite.getRequests()
+    if (!collectionId) {
+      // Merge local + remote, remote takes precedence (same pattern as workspaces)
+      const [local, remote] = await Promise.all([
+        this.sqlite.getRequests(),
+        this.rest.getRequests().catch(() => [] as RequestConfig[]),
+      ])
+      const map = new Map<string, RequestConfig>()
+      for (const r of local)  map.set(r.id, r)
+      for (const r of remote) map.set(r.id, r)
+      return [...map.values()]
+    }
     const col = await this.getCollection(collectionId)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     return adapter.getRequests(collectionId)
   }
   async getRequest(id: string): Promise<RequestConfig | undefined> {
-    return await this.sqlite.getRequest(id) ?? this.rest.getRequest(id)
+    const local = await this.sqlite.getRequest(id)
+    if (!local) return this.rest.getRequest(id).catch(() => undefined)
+    // For cloud workspaces, always fetch from REST to get the authoritative updatedAt
+    const col = local.collectionId ? await this.getCollection(local.collectionId) : undefined
+    if (col?.workspaceId) {
+      const isCloud = await this.adapterFor(col.workspaceId).then(a => a === this.rest)
+      if (isCloud) return this.rest.getRequest(id).catch(() => local)
+    }
+    return local
   }
   async createRequest(r: RequestConfig): Promise<void> {
     const col = r.collectionId ? await this.getCollection(r.collectionId) : undefined
@@ -237,7 +255,16 @@ export class HybridAdapter implements DatabaseAdapter {
 
   // ── Socket configs ───────────────────────────────────────────────────────────
   async getSocketConfigs(collectionId?: string): Promise<SocketConfig[]> {
-    if (!collectionId) return this.sqlite.getSocketConfigs()
+    if (!collectionId) {
+      const [local, remote] = await Promise.all([
+        this.sqlite.getSocketConfigs(),
+        this.rest.getSocketConfigs().catch(() => [] as SocketConfig[]),
+      ])
+      const map = new Map<string, SocketConfig>()
+      for (const s of local)  map.set(s.id, s)
+      for (const s of remote) map.set(s.id, s)
+      return [...map.values()]
+    }
     const col = await this.getCollection(collectionId)
     const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
     return adapter.getSocketConfigs(collectionId)
@@ -248,11 +275,19 @@ export class HybridAdapter implements DatabaseAdapter {
     await adapter.createSocketConfig(c)
   }
   async updateSocketConfig(id: string, data: Partial<SocketConfig>): Promise<void> {
-    // We don't have a getSocketConfig by id on the adapter, so try both
-    await this.sqlite.updateSocketConfig(id, data).catch(() => this.rest.updateSocketConfig(id, data))
+    const all = await this.getSocketConfigs()
+    const sc = all.find(s => s.id === id)
+    const collectionId = sc?.collectionId ?? (data as Partial<SocketConfig>).collectionId
+    const col = collectionId ? await this.getCollection(collectionId) : undefined
+    const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
+    await adapter.updateSocketConfig(id, data)
   }
   async deleteSocketConfig(id: string): Promise<void> {
-    await this.sqlite.deleteSocketConfig(id).catch(() => this.rest.deleteSocketConfig(id))
+    const all = await this.getSocketConfigs()
+    const sc = all.find(s => s.id === id)
+    const col = sc?.collectionId ? await this.getCollection(sc.collectionId) : undefined
+    const adapter = col?.workspaceId ? await this.adapterFor(col.workspaceId) : this.sqlite
+    await adapter.deleteSocketConfig(id)
   }
 
   // ── History ──────────────────────────────────────────────────────────────────
@@ -269,7 +304,10 @@ export class HybridAdapter implements DatabaseAdapter {
     return (await this.adapterFor(workspaceId)).clearHistory(workspaceId)
   }
   async deleteHistoryEntry(id: string): Promise<void> {
-    await this.sqlite.deleteHistoryEntry(id).catch(() => this.rest.deleteHistoryEntry(id))
+    const all = [...await this.sqlite.getHistory(), ...await this.rest.getHistory().catch(() => [])]
+    const entry = all.find(h => h.id === id)
+    const adapter = entry?.workspaceId ? await this.adapterFor(entry.workspaceId) : this.sqlite
+    await adapter.deleteHistoryEntry(id)
   }
 
   // ── Environments ─────────────────────────────────────────────────────────────
@@ -285,10 +323,14 @@ export class HybridAdapter implements DatabaseAdapter {
     await adapter.createEnvironment(env)
   }
   async updateEnvironment(id: string, data: Partial<Environment>): Promise<void> {
-    await this.sqlite.updateEnvironment(id, data).catch(() => this.rest.updateEnvironment(id, data))
+    const env = await this.getEnvironment(id)
+    const adapter = env?.workspaceId ? await this.adapterFor(env.workspaceId) : this.sqlite
+    await adapter.updateEnvironment(id, data)
   }
   async deleteEnvironment(id: string): Promise<void> {
-    await this.sqlite.deleteEnvironment(id).catch(() => this.rest.deleteEnvironment(id))
+    const env = await this.getEnvironment(id)
+    const adapter = env?.workspaceId ? await this.adapterFor(env.workspaceId) : this.sqlite
+    await adapter.deleteEnvironment(id)
   }
   async setActiveEnvironment(id: string | null, workspaceId?: string): Promise<void> {
     if (!workspaceId) return this.sqlite.setActiveEnvironment(id)
@@ -297,7 +339,16 @@ export class HybridAdapter implements DatabaseAdapter {
 
   // ── Sequences ────────────────────────────────────────────────────────────────
   async getSequences(workspaceId?: string): Promise<Sequence[]> {
-    if (!workspaceId) return this.sqlite.getSequences()
+    if (!workspaceId) {
+      const [local, remote] = await Promise.all([
+        this.sqlite.getSequences(),
+        this.rest.getSequences().catch(() => [] as Sequence[]),
+      ])
+      const map = new Map<string, Sequence>()
+      for (const s of local)  map.set(s.id, s)
+      for (const s of remote) map.set(s.id, s)
+      return [...map.values()]
+    }
     return (await this.adapterFor(workspaceId)).getSequences(workspaceId)
   }
   async createSequence(s: Sequence): Promise<void> {
@@ -305,10 +356,17 @@ export class HybridAdapter implements DatabaseAdapter {
     await adapter.createSequence(s)
   }
   async updateSequence(id: string, data: Partial<Sequence>): Promise<void> {
-    await this.sqlite.updateSequence(id, data).catch(() => this.rest.updateSequence(id, data))
+    const all = await this.getSequences()
+    const seq = all.find(s => s.id === id)
+    const workspaceId = seq?.workspaceId ?? (data as Partial<Sequence>).workspaceId
+    const adapter = workspaceId ? await this.adapterFor(workspaceId) : this.sqlite
+    await adapter.updateSequence(id, data)
   }
   async deleteSequence(id: string): Promise<void> {
-    await this.sqlite.deleteSequence(id).catch(() => this.rest.deleteSequence(id))
+    const all = await this.getSequences()
+    const seq = all.find(s => s.id === id)
+    const adapter = seq?.workspaceId ? await this.adapterFor(seq.workspaceId) : this.sqlite
+    await adapter.deleteSequence(id)
   }
 
   // ── Workspace state ───────────────────────────────────────────────────────────

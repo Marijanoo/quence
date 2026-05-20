@@ -61,6 +61,7 @@ import { useAuth } from '@/lib/auth/auth-context'
 import type { Workspace, Environment, EnvironmentVariable } from '@/lib/db/types'
 import { leaveWorkspace } from '@/lib/collaboration/store'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
+import { DatabaseView } from './database-view'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -160,6 +161,23 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Sequence state
   const [activeView, setActiveView] = useState<'requests' | 'sequences' | 'jwt' | 'json' | 'diff'>('requests')
+  const [appMode, setAppMode] = useState<'api' | 'database'>(() => {
+    try { return (localStorage.getItem('quence-app-mode') as 'api' | 'database') || 'api' } catch { return 'api' }
+  })
+  const [switchingMode, setSwitchingMode] = useState<'api' | 'database' | null>(null)
+  const switchMode = (mode: 'api' | 'database') => {
+    setSwitchingMode(mode)
+    setTimeout(() => { setAppMode(mode); try { localStorage.setItem('quence-app-mode', mode) } catch {} }, 150)
+    setTimeout(() => setSwitchingMode(null), 600)
+  }
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine)
+  useEffect(() => {
+    const up = () => setIsOnline(true)
+    const down = () => setIsOnline(false)
+    window.addEventListener('online', up)
+    window.addEventListener('offline', down)
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down) }
+  }, [])
   const [runningSequenceId, setRunningSequenceId] = useState<string | null>(null)
   const [stepResults, setStepResults] = useState<Record<string, SequenceStepResult>>({})
   const sequenceAbortRef = useRef<boolean>(false)
@@ -450,6 +468,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           method: request.method,
           headers,
           requestBody,
+          formDataEntries,
           requestId,
         })
         activeElectronRequestIdRef.current = null
@@ -1300,15 +1319,16 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Stable ref so the keyboard handler always sees current values without
   // changing the useEffect dep array size (avoids rules-of-hooks violations).
-  const kbStateRef = useRef({ canWrite, activeTabId, activeSocketTabId, tabs, socketTabs })
+  const kbStateRef = useRef({ canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode })
   useEffect(() => {
-    kbStateRef.current = { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs }
+    kbStateRef.current = { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode }
   })
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs } = kbStateRef.current
+      const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode } = kbStateRef.current
+      if (appMode !== 'api') return
 
       if (e.ctrlKey && !e.altKey && !e.metaKey) {
         if (e.key.toLowerCase() === 's') {
@@ -1316,12 +1336,16 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           if (canWrite) { if (activeSocketTabId) openSaveSocketDialog(); else openSaveDialog(); }
         } else if (e.key.toLowerCase() === 't') {
           e.preventDefault();
-          setActiveSocketTabId(null);
-          createTab();
+          if (!window.electronAPI) {
+            setActiveSocketTabId(null);
+            createTab();
+          }
         } else if (e.key.toLowerCase() === 'w') {
           e.preventDefault();
-          const activeId = activeSocketTabId ?? activeTabId;
-          if (activeId) handleUnifiedCloseTab(activeId);
+          if (!window.electronAPI) {
+            const activeId = activeSocketTabId ?? activeTabId;
+            if (activeId) handleUnifiedCloseTab(activeId);
+          }
         } else if (e.key === 'Enter') {
           e.preventDefault();
           executeRequest();
@@ -1355,6 +1379,26 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [createTab, handleUnifiedCloseTab, setActiveTab, setActiveSocketTabId, openSaveDialog, openSaveSocketDialog, executeRequest]);
+
+  useEffect(() => {
+    if (appMode !== 'api') return
+    const handleClose = () => {
+      const activeId = activeSocketTabId ?? activeTabId
+      if (activeId) {
+        handleUnifiedCloseTab(activeId)
+      }
+    }
+    const handleNewTab = () => {
+      setActiveSocketTabId(null)
+      createTab()
+    }
+    window.electronAPI?.onCloseActiveTab?.(handleClose)
+    window.electronAPI?.onNewQueryTab?.(handleNewTab)
+    return () => {
+      window.electronAPI?.offCloseActiveTab?.(handleClose)
+      window.electronAPI?.offNewQueryTab?.(handleNewTab)
+    }
+  }, [appMode, activeSocketTabId, activeTabId, handleUnifiedCloseTab, createTab, setActiveSocketTabId])
 
   // Import collection handler (also receives socket configs from Postman imports)
   const handleImportCollection = useCallback(async (collection: Collection, importedRequests: RequestConfig[], socketConfigs?: SocketConfig[]) => {
@@ -1555,8 +1599,21 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
             {switchingToName ? `Switching to ${switchingToName}…` : 'Loading workspace…'}
           </p>
         </div>
+
+        {/* Mode switch overlay */}
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background gap-4 transition-opacity duration-300 pointer-events-none"
+          style={{ opacity: switchingMode ? 1 : 0 }}
+        >
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">
+            {switchingMode === 'database' ? 'Switching to QuenceDB…' : 'Switching to QuenceAPI…'}
+          </p>
+        </div>
         <TitleBar
-          workspaceDropdown={
+          appMode={appMode}
+          onSwitchMode={switchMode}
+          workspaceDropdown={appMode === 'api' ? (
             <WorkspaceDropdown
               workspaces={workspaces}
               activeWorkspace={activeWorkspace}
@@ -1572,20 +1629,20 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               getWorkspace={(id) => workspaces.find(w => w.id === id)}
               onLeave={handleLeaveWorkspace}
             />
-          }
-          environments={
+          ) : undefined}
+          environments={appMode === 'api' ? (
             <EnvironmentSelector
               environments={environments}
               activeEnvironment={activeEnvironment}
               onSelect={setActiveEnvironment}
             />
-          }
-          activeWorkspace={activeWorkspace}
-          isOwner={isOwner}
-          onUpdateWorkspace={updateWorkspace}
-          onOpenHelp={() => setIsHelpOpen(true)}
-          onSave={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
-          canSave={canWrite && (!!activeTab || !!activeSocketTab)}
+          ) : undefined}
+          activeWorkspace={appMode === 'api' ? activeWorkspace : undefined}
+          isOwner={appMode === 'api' ? isOwner : false}
+          onUpdateWorkspace={appMode === 'api' ? updateWorkspace : undefined}
+          onOpenHelp={appMode === 'api' ? () => setIsHelpOpen(true) : undefined}
+          onSave={appMode === 'api' ? (activeSocketTabId ? openSaveSocketDialog : openSaveDialog) : undefined}
+          canSave={appMode === 'api' && canWrite && (!!activeTab || !!activeSocketTab)}
           onInviteAccepted={(wsId) => switchWorkspace(wsId)}
           onRefreshWorkspaces={refreshWorkspaces}
         />
@@ -1605,7 +1662,13 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           onChange={handleImportAllFile}
         />
 
+
       {/* Main content */}
+      <div className={appMode === 'database' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+        <DatabaseView isActive={appMode === 'database'} />
+      </div>
+      <div className={appMode === 'api' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+      <>
       <ResizablePanelGroup direction="horizontal" className="flex-1">
         {/* Sidebar */}
         <ResizablePanel defaultSize={20} minSize={15} maxSize={35}>
@@ -1893,6 +1956,22 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           </button>
         </div>
       </div>
+      </>
+      </div>
+
+      {/* Workspace / connectivity strip */}
+      {!isOnline && (
+        <div className="flex items-center justify-center gap-2 px-3 h-6 bg-red-500/15 border-t border-red-500/30 shrink-0">
+          <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+          <span className="text-xs text-red-400">No internet connection — changes may not sync until you reconnect.</span>
+        </div>
+      )}
+      {isOnline && activeWorkspace?.ownerId === 'local' && (
+        <div className="flex items-center justify-center gap-2 px-3 h-6 bg-yellow-500/10 border-t border-yellow-500/20 shrink-0">
+          <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 shrink-0" />
+          <span className="text-xs text-yellow-500/80">Local workspace — changes are saved to this device only.</span>
+        </div>
+      )}
 
       <SettingsPanel open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <HelpPanel open={isHelpOpen} onClose={() => setIsHelpOpen(false)} />

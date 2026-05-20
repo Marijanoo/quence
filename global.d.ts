@@ -5,6 +5,12 @@ declare global {
     electronAPI?: {
       makeRequest: (options: any) => Promise<any>
       cancelRequest: (requestId: string) => void
+      onRunQuery?: (cb: () => void) => void
+      offRunQuery?: (cb?: () => void) => void
+      onCloseActiveTab?: (cb: () => void) => void
+      offCloseActiveTab?: (cb?: () => void) => void
+      onNewQueryTab?: (cb: () => void) => void
+      offNewQueryTab?: (cb?: () => void) => void
       onUpdateAvailable?: (cb: () => void) => void
       onUpdateProgress?: (cb: (percent: number) => void) => void
       onUpdateDownloaded: (cb: () => void) => void
@@ -83,6 +89,13 @@ declare global {
           send: (invite: any) => Promise<void>
           delete: (id: string) => Promise<void>
         }
+      }
+      pg: {
+        connect:      (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean }) => Promise<{ ok: boolean; error?: string }>
+        disconnect:   (id: string) => Promise<{ ok: boolean; error?: string }>
+        query:        (id: string, sql: string, database?: string) => Promise<{ ok: boolean; rows?: Record<string, unknown>[]; fields?: string[]; rowCount?: number | null; ms?: number; error?: string }>
+        introspect:   (id: string) => Promise<{ ok: boolean; databases?: string[]; error?: string }>
+        introspectDb: (id: string, database: string) => Promise<{ ok: boolean; tables?: { table_schema: string; table_name: string; table_type: string }[]; functions?: { routine_schema: string; routine_name: string; arguments?: string }[]; error?: string }>
       }
     }
   }

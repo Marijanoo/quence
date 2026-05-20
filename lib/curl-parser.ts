@@ -65,6 +65,7 @@ export function parseCurl(input: string): Partial<RequestConfig> | null {
   let bodyType: BodyType = 'none'
   let auth: AuthConfig = { type: 'none' }
   let isGetForced = false
+  const multipartFormData: KeyValuePair[] = []
 
   let i = 1
   while (i < tokens.length) {
@@ -92,6 +93,25 @@ export function parseCurl(input: string): Partial<RequestConfig> | null {
           enabled: true,
         })
       }
+      i++
+      continue
+    }
+
+    // -F / --form  →  multipart/form-data
+    if (tok === '-F' || tok === '--form') {
+      const raw = tokens[++i] ?? ''
+      const eq = raw.indexOf('=')
+      const key = eq === -1 ? raw : raw.slice(0, eq)
+      const val = eq === -1 ? '' : raw.slice(eq + 1)
+      const isFile = val.startsWith('@')
+      multipartFormData.push({
+        id: uuid(),
+        key,
+        value: isFile ? val.slice(1) : val,
+        enabled: true,
+        type: isFile ? 'file' : 'text',
+      })
+      bodyType = 'form-data'
       i++
       continue
     }
@@ -317,7 +337,7 @@ export function parseCurl(input: string): Partial<RequestConfig> | null {
     body: {
       type: bodyType,
       content: bodyType === 'x-www-form-urlencoded' ? '' : bodyContent,
-      formData: bodyType === 'x-www-form-urlencoded' ? formData : [],
+      formData: bodyType === 'form-data' ? multipartFormData : bodyType === 'x-www-form-urlencoded' ? formData : [],
     },
     auth,
   }
