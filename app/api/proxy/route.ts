@@ -32,7 +32,9 @@ export async function POST(request: NextRequest) {
 
     // Build headers object, filtering out certain headers
     const fetchHeaders: Record<string, string> = {}
-    const skipHeaders = ['host', 'connection', 'content-length', 'transfer-encoding']
+    // Also strip content-type when sending form-data — fetch sets it automatically with the correct boundary
+    const isFormData = formDataEntries && formDataEntries.length > 0
+    const skipHeaders = ['host', 'connection', 'content-length', 'transfer-encoding', ...(isFormData ? ['content-type'] : [])]
     
     if (headers) {
       for (const [key, value] of Object.entries(headers)) {

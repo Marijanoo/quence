@@ -90,12 +90,26 @@ declare global {
           delete: (id: string) => Promise<void>
         }
       }
+      pty: {
+        create:  (id: string, cols: number, rows: number) => Promise<{ ok: boolean }>
+        ready:   (id: string) => void
+        write:   (id: string, data: string) => void
+        line:    (id: string, line: string) => void
+        resize:  (id: string, cols: number, rows: number) => void
+        kill:    (id: string) => Promise<{ ok: boolean }>
+        homedir: () => Promise<string>
+        onData:  (id: string, cb: (data: string) => void) => void
+        onExit:  (id: string, cb: () => void) => void
+        offData: (id: string) => void
+        offExit: (id: string) => void
+      }
       pg: {
-        connect:      (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean }) => Promise<{ ok: boolean; error?: string }>
-        disconnect:   (id: string) => Promise<{ ok: boolean; error?: string }>
-        query:        (id: string, sql: string, database?: string) => Promise<{ ok: boolean; rows?: Record<string, unknown>[]; fields?: string[]; rowCount?: number | null; ms?: number; error?: string }>
-        introspect:   (id: string) => Promise<{ ok: boolean; databases?: string[]; error?: string }>
-        introspectDb: (id: string, database: string) => Promise<{ ok: boolean; tables?: { table_schema: string; table_name: string; table_type: string }[]; functions?: { routine_schema: string; routine_name: string; arguments?: string }[]; error?: string }>
+        connect:         (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string }) => Promise<{ ok: boolean; error?: string }>
+        disconnect:      (id: string) => Promise<{ ok: boolean; error?: string }>
+        query:           (id: string, sql: string, database?: string) => Promise<{ ok: boolean; rows?: Record<string, unknown>[]; fields?: string[]; rowCount?: number | null; ms?: number; error?: string }>
+        introspect:      (id: string) => Promise<{ ok: boolean; databases?: string[]; error?: string }>
+        introspectDb:    (id: string, database: string) => Promise<{ ok: boolean; tables?: { table_schema: string; table_name: string; table_type: string }[]; functions?: { routine_schema: string; routine_name: string; arguments?: string }[]; error?: string }>
+        selectOvpnFile:  () => Promise<string | null>
       }
     }
   }
