@@ -1050,14 +1050,20 @@ app.on('ready', () => {
     }
   })
 
-  app.on('will-quit', () => {
-    for (const [, proc] of termProcesses) {
-      try {
-        proc.kill()
-      } catch (err) {}
+  // Kill all PTYs before Node starts tearing down its environment.
+  // If onData fires after teardown, node-pty throws a C++ exception → SIGABRT.
+  // 'before-quit' fires before 'will-quit' and before window close, giving us
+  // a chance to destroy PTYs while the JS environment is still intact.
+  app.on('before-quit', () => {
+    for (const id of [...termProcesses.keys()]) {
+      destroyTerm(id)
     }
     termProcesses.clear()
+    termAlive.clear()
+    termResizeReady.clear()
+  })
 
+  app.on('will-quit', () => {
     for (const [id] of vpnProcesses) {
       killVpn(id)
     }
