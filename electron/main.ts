@@ -641,11 +641,11 @@ app.on('ready', () => {
         await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
       }
 
-      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 10000 })
+      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 30000 })
       // Test the connection with an explicit timeout in case TCP opens but server never responds
       const client = await Promise.race([
         pool.connect(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 10s')), 10000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 30s')), 30000)),
       ])
       client.release()
       pgPools.set(id, pool)
