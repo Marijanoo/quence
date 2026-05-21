@@ -92,18 +92,22 @@ declare global {
         }
       }
       pty: {
-        create:  (id: string, cols: number, rows: number) => Promise<{ ok: boolean }>
+        create:  (id: string, cols: number, rows: number, cwd?: string) => Promise<{ ok: boolean }>
         ready:   (id: string) => void
         write:   (id: string, data: string) => void
         line:    (id: string, line: string) => void
         resize:  (id: string, cols: number, rows: number) => void
         kill:    (id: string) => Promise<{ ok: boolean }>
+        popout:  (id: string, title: string) => Promise<{ ok: boolean }>
         homedir: () => Promise<string>
         onData:  (id: string, cb: (data: string) => void) => void
         onExit:  (id: string, cb: () => void) => void
         offData: (id: string) => void
         offExit: (id: string) => void
         stats:   (ids: string[]) => Promise<Record<string, { cpu: number; memory: number }>>
+        onPopoutClosed: (cb: (id: string) => void) => void
+        onPopIn:        (cb: (id: string) => void) => void
+        popIn:          (id: string) => void
       }
       pg: {
         connect:         (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string }) => Promise<{ ok: boolean; error?: string }>
