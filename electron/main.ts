@@ -1060,39 +1060,66 @@ app.on('window-all-closed', () => {
 
 // Auto-updater — only runs in production builds
 if (isProd) {
-  autoUpdater.logger = null
+  const logFile = fs.createWriteStream(path.join(app.getPath('userData'), 'updater.log'), { flags: 'a' })
+  const log = {
+    info:  (...a: unknown[]) => { const msg = `[${new Date().toISOString()}] INFO  ${a.join(' ')}\n`; logFile.write(msg); console.log(msg.trimEnd()) },
+    warn:  (...a: unknown[]) => { const msg = `[${new Date().toISOString()}] WARN  ${a.join(' ')}\n`; logFile.write(msg); console.warn(msg.trimEnd()) },
+    error: (...a: unknown[]) => { const msg = `[${new Date().toISOString()}] ERROR ${a.join(' ')}\n`; logFile.write(msg); console.error(msg.trimEnd()) },
+  }
+  autoUpdater.logger = log
   autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  // macOS: use zip for updates (works without code signing / notarisation)
+  if (process.platform === 'darwin') {
+    autoUpdater.channel = 'latest'
+  }
+
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: 'Marijanoo',
     repo: 'quence',
   })
 
-  autoUpdater.on('update-available', () => {
+  autoUpdater.on('checking-for-update', () => {
+    log.info('[updater] Checking for update…')
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    log.info('[updater] Update available:', info.version)
     mainWindow?.webContents.send('update-available')
   })
 
+  autoUpdater.on('update-not-available', (info) => {
+    log.info('[updater] Already up to date:', info.version)
+  })
+
   autoUpdater.on('download-progress', (info) => {
+    log.info(`[updater] Downloading… ${info.percent.toFixed(1)}% (${(info.transferred / 1024 / 1024).toFixed(1)} / ${(info.total / 1024 / 1024).toFixed(1)} MB)`)
     mainWindow?.webContents.send('update-progress', info.percent)
   })
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info('[updater] Update downloaded, ready to install:', info.version)
     mainWindow?.webContents.send('update-downloaded')
   })
 
-  autoUpdater.on('error', () => {})
+  autoUpdater.on('error', (err) => {
+    log.error('[updater] Error:', err?.message ?? err)
+  })
 
-  // Swallow any unhandled rejections from electron-updater (e.g. 404 when release not yet published)
+  // Swallow unhandled rejections from electron-updater (e.g. 404 before release is published)
   process.on('unhandledRejection', () => {})
 
   ipcMain.on('install-update', () => {
-    autoUpdater.quitAndInstall()
+    autoUpdater.quitAndInstall(false, true)
   })
 
-  // Delay check until window is ready so a failed update check can't crash the renderer
+  // Check once the first window finishes loading, then every 4 hours
   app.on('browser-window-created', (_, win) => {
     win.webContents.once('did-finish-load', () => {
-      autoUpdater.checkForUpdates().catch(() => {})
+      setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 3000)
+      setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000)
     })
   })
 }
