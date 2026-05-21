@@ -129,7 +129,7 @@ function Section({
         <span className={cn('text-[11px] font-semibold uppercase tracking-widest', color)}>{label}</span>
         {copyText && <CopyButton text={copyText} />}
       </div>
-      <div className="flex-1 overflow-y-auto bg-background rounded-md border border-border p-3 text-xs break-all leading-relaxed">
+      <div className="flex-1 overflow-y-auto bg-background rounded-md border border-border p-3 text-xs break-all leading-relaxed select-text cursor-text">
         {children}
       </div>
     </div>

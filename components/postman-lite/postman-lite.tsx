@@ -1866,8 +1866,9 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       </div>
 
       {/* Bottom bar — always visible across all modes */}
-      <div className="flex items-center justify-between px-3 h-7 border-t border-border bg-card shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 px-3 h-7 border-t border-border bg-card shrink-0 overflow-hidden">
+        {/* Left: Appearance + version — never shrink */}
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => setIsSettingsOpen(o => !o)}
             title="Appearance settings"
@@ -1877,23 +1878,30 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
             }`}
           >
-            <Settings2 className="h-3.5 w-3.5" />
+            <Settings2 className="h-3.5 w-3.5 shrink-0" />
             <span>Appearance</span>
           </button>
           <span className="text-xs text-muted-foreground/40 select-none">v{version}</span>
         </div>
 
+        {/* Update bar — takes available middle space */}
         {updateProgress !== null && (
-          <UpdateBar
-            progress={updateProgress}
-            downloaded={updateDownloaded}
-            onInstall={() => onInstallUpdate?.()}
-            onDismiss={() => onDismissUpdate?.()}
-          />
+          <div className="flex-1 min-w-0 flex justify-center">
+            <UpdateBar
+              progress={updateProgress}
+              downloaded={updateDownloaded}
+              onInstall={() => onInstallUpdate?.()}
+              onDismiss={() => onDismissUpdate?.()}
+            />
+          </div>
         )}
 
+        {/* Spacer pushes right group to the end */}
+        {updateProgress === null && <div className="flex-1" />}
+
+        {/* Right: view switcher — shrinks but clips cleanly */}
         {appMode === 'api' && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => setActiveView('requests')}
               title="Requests"
@@ -1903,8 +1911,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
               }`}
             >
-              <PanelRight className="h-3.5 w-3.5" />
-              <span>Requests</span>
+              <PanelRight className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Requests</span>
             </button>
             <button
               onClick={() => setActiveView('sequences')}
@@ -1915,8 +1923,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
               }`}
             >
-              <ListOrdered className="h-3.5 w-3.5" />
-              <span>Sequences</span>
+              <ListOrdered className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Sequences</span>
             </button>
             <button
               onClick={() => setActiveView('jwt')}
@@ -1927,8 +1935,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
               }`}
             >
-              <KeyRound className="h-3.5 w-3.5" />
-              <span>JWT</span>
+              <KeyRound className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">JWT</span>
             </button>
             <button
               onClick={() => setActiveView('json')}
@@ -1939,8 +1947,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
               }`}
             >
-              <Braces className="h-3.5 w-3.5" />
-              <span>JSON</span>
+              <Braces className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">JSON</span>
             </button>
             <button
               onClick={() => setActiveView('diff')}
@@ -1951,8 +1959,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent/20'
               }`}
             >
-              <GitCompare className="h-3.5 w-3.5" />
-              <span>Diff</span>
+              <GitCompare className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Diff</span>
             </button>
             <button
               onClick={() => setResponseLayout(l => l === 'side' ? 'bottom' : 'side')}
@@ -1960,9 +1968,9 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               className="flex items-center gap-1.5 px-2 h-5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
             >
               {responseLayout === 'side'
-                ? <PanelBottom className="h-3.5 w-3.5" />
-                : <PanelRight className="h-3.5 w-3.5" />}
-              <span>{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
+                ? <PanelBottom className="h-3.5 w-3.5 shrink-0" />
+                : <PanelRight className="h-3.5 w-3.5 shrink-0" />}
+              <span className="hidden md:inline">{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
             </button>
           </div>
         )}
