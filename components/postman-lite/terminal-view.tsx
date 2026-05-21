@@ -4,10 +4,35 @@ import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHand
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { X, Plus, TerminalSquare, Copy, Check } from 'lucide-react'
+import { X, Plus, TerminalSquare, Copy, Check, ExternalLink } from 'lucide-react'
 import { generateId } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import '@xterm/xterm/css/xterm.css'
+
+function getCssVar(name: string, fallback: string) {
+  if (typeof document === 'undefined') return fallback
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+function getTermTheme() {
+  return {
+    background:          getCssVar('--term-bg',      '#0f0f0f'),
+    foreground:          getCssVar('--term-fg',      '#e4e4e7'),
+    cursor:              getCssVar('--term-cursor',  '#a1a1aa'),
+    selectionBackground: '#3f3f46',
+    black: '#18181b',
+    red:     getCssVar('--term-red',     '#f87171'),
+    green:   getCssVar('--term-green',   '#4ade80'),
+    yellow:  getCssVar('--term-yellow',  '#facc15'),
+    blue:    getCssVar('--term-blue',    '#60a5fa'),
+    magenta: getCssVar('--term-magenta', '#c084fc'),
+    cyan:    getCssVar('--term-cyan',    '#22d3ee'),
+    white:   '#e4e4e7',
+    brightBlack: '#52525b', brightRed: '#fca5a5', brightGreen: '#86efac',
+    brightYellow: '#fde047', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
+    brightCyan: '#67e8f9', brightWhite: '#f4f4f5',
+  }
+}
 
 interface TermTab {
   id: string
@@ -53,17 +78,7 @@ function TerminalPane({ id, isVisible, cwd, onKill, onCwdChange }, ref) {
       lineHeight: 1.35,
       cursorBlink: true,
       cursorStyle: 'bar',
-      theme: {
-        background: '#0f0f0f',
-        foreground: '#e4e4e7',
-        cursor: '#a1a1aa',
-        selectionBackground: '#3f3f46',
-        black: '#18181b', red: '#f87171', green: '#4ade80', yellow: '#facc15',
-        blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#e4e4e7',
-        brightBlack: '#52525b', brightRed: '#fca5a5', brightGreen: '#86efac',
-        brightYellow: '#fde047', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
-        brightCyan: '#67e8f9', brightWhite: '#f4f4f5',
-      },
+      theme: getTermTheme(),
     })
 
     const fitAddon = new FitAddon()
@@ -210,11 +225,21 @@ export function TerminalView({ isActive, onCountChange }: { isActive: boolean; o
   const [activeTermId, setActiveTermId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [stats, setStats] = useState<Record<string, { cpu: number; memory: number }>>({})
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [poppedOutIds, setPoppedOutIds] = useState<Set<string>>(new Set())
   const counterRef = useRef(1)
   const paneRefs = useRef<Map<string, TerminalPaneHandle>>(new Map())
+  const dragIdRef = useRef<string | null>(null)
 
   // Report count to parent
   useEffect(() => { onCountChange?.(terms.length) }, [terms.length, onCountChange])
+
+  // Clear popped-out state when the popout window is closed or popped back in
+  useEffect(() => {
+    const clear = (id: string) => setPoppedOutIds(prev => { const next = new Set(prev); next.delete(id); return next })
+    window.electronAPI?.pty.onPopoutClosed?.(clear)
+    window.electronAPI?.pty.onPopIn?.(clear)
+  }, [])
 
   // Persist terminal list whenever it changes
   useEffect(() => {
@@ -255,6 +280,7 @@ export function TerminalView({ isActive, onCountChange }: { isActive: boolean; o
   const closeTerm = useCallback((id: string) => {
     window.electronAPI?.pty.kill(id)
     paneRefs.current.delete(id)
+    setPoppedOutIds(prev => { const next = new Set(prev); next.delete(id); return next })
     setTerms(prev => {
       const next = prev.filter(t => t.id !== id)
       if (next.length === 0) localStorage.removeItem(STORAGE_KEY)
@@ -285,17 +311,51 @@ export function TerminalView({ isActive, onCountChange }: { isActive: boolean; o
     setTimeout(() => setCopiedId(prev => prev === id ? null : prev), 2000)
   }, [])
 
+  const swapTerms = useCallback((aId: string, bId: string) => {
+    setTerms(prev => {
+      const next = [...prev]
+      const ai = next.findIndex(t => t.id === aId)
+      const bi = next.findIndex(t => t.id === bId)
+      if (ai === -1 || bi === -1 || ai === bi) return prev
+      ;[next[ai], next[bi]] = [next[bi], next[ai]]
+      return next
+    })
+  }, [])
+
+  const rowCount = Math.ceil((terms.length + 1) / 2)
+
   return (
     <div className="flex flex-col w-full h-full bg-background overflow-hidden">
-      <div className="grid grid-cols-2 gap-3 p-3 overflow-auto" style={{ gridAutoRows: 'calc(50vh - 36px)' }}>
+      <div
+        className="grid grid-cols-2 gap-3 p-3 flex-1 min-h-0"
+        style={{ gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))` }}
+      >
         {terms.map(term => (
           <div
             key={term.id}
-            className="flex flex-col rounded-lg border border-border overflow-hidden"
+            onDragOver={e => { e.preventDefault(); setDragOverId(term.id) }}
+            onDragLeave={() => setDragOverId(prev => prev === term.id ? null : prev)}
+            onDrop={e => {
+              e.preventDefault()
+              if (dragIdRef.current && dragIdRef.current !== term.id) swapTerms(dragIdRef.current, term.id)
+              dragIdRef.current = null
+              setDragOverId(null)
+            }}
+            className={cn(
+              "flex flex-col rounded-lg border overflow-hidden transition-colors",
+              dragOverId === term.id && dragIdRef.current !== term.id
+                ? "border-primary/60 bg-primary/5"
+                : "border-border"
+            )}
             onClick={() => setActiveTermId(term.id)}
           >
-            <div className={cn(
-              "flex items-center gap-2 px-3 py-1.5 border-b shrink-0",
+            {/* Drag handle is only the header — avoids Blink crashing when dragging a div containing xterm canvas */}
+            <div
+              draggable
+              onDragStart={e => { e.stopPropagation(); dragIdRef.current = term.id }}
+              onDragEnd={() => { dragIdRef.current = null; setDragOverId(null) }}
+              className={cn(
+              "flex items-center gap-2 px-3 py-1.5 border-b shrink-0 cursor-grab active:cursor-grabbing",
               activeTermId === term.id ? "bg-primary/15 border-primary/40" : "bg-card border-border"
             )}>
               <TerminalSquare className="h-3.5 w-3.5 text-green-400 shrink-0" />
@@ -316,21 +376,51 @@ export function TerminalView({ isActive, onCountChange }: { isActive: boolean; o
                   : <Copy className="h-3.5 w-3.5" />}
               </button>
               <button
+                onClick={() => {
+                  window.electronAPI?.pty.popout?.(term.id, term.title)
+                  setPoppedOutIds(prev => new Set(prev).add(term.id))
+                }}
+                className={cn(
+                  "transition-colors shrink-0",
+                  poppedOutIds.has(term.id)
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title={poppedOutIds.has(term.id) ? "Already popped out" : "Pop out"}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+              <button
                 onClick={() => closeTerm(term.id)}
                 className="text-muted-foreground hover:text-red-400 transition-colors shrink-0"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="flex-1 min-h-0" style={{ background: '#0f0f0f' }}>
-              <TerminalPane
-                ref={el => { if (el) paneRefs.current.set(term.id, el) }}
-                id={term.id}
-                isVisible={isActive}
-                cwd={term.cwd}
-                onKill={() => window.electronAPI?.pty.kill(term.id)}
-                onCwdChange={(newCwd) => updateTermCwd(term.id, newCwd)}
-              />
+            <div className="flex-1 min-h-0" style={{ background: 'var(--term-bg, #0f0f0f)' }}>
+              {poppedOutIds.has(term.id) ? (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-muted-foreground select-none">
+                  <ExternalLink className="h-5 w-5 opacity-40" />
+                  <span className="text-xs opacity-40">Terminal is popped out</span>
+                  <button
+                    onClick={() => {
+                      window.electronAPI?.pty.popout?.(term.id, term.title)
+                    }}
+                    className="text-xs text-primary/60 hover:text-primary transition-colors mt-1"
+                  >
+                    Focus window
+                  </button>
+                </div>
+              ) : (
+                <TerminalPane
+                  ref={el => { if (el) paneRefs.current.set(term.id, el) }}
+                  id={term.id}
+                  isVisible={isActive}
+                  cwd={term.cwd}
+                  onKill={() => window.electronAPI?.pty.kill(term.id)}
+                  onCwdChange={(newCwd) => updateTermCwd(term.id, newCwd)}
+                />
+              )}
             </div>
           </div>
         ))}

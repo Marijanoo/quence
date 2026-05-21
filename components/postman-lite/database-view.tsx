@@ -9,7 +9,7 @@ import {
 import {
   Database, Table2, FunctionSquare, ChevronRight, ChevronDown,
   Plus, Play, PlugZap, FileCode2, RefreshCw, X, FileText, Loader2, View, Pencil, Save, FileCode, Search, Plug,
-  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight, Shield, Tag, Shapes,
+  Circle, Wrench, Check, Workflow, Key, Minus, Download, Sparkles, Braces, Clock, AlignLeft, AlignCenter, AlignRight, Shield, Tag, Shapes, AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { generateId } from '@/lib/utils'
@@ -46,6 +46,7 @@ interface DbDatabase {
   name: string
   open: boolean
   loading: boolean
+  error?: string
   schemas: SchemaEntry[]
 }
 
@@ -1168,6 +1169,11 @@ function ConnectionsPanel({
                     <Database className="h-3.5 w-3.5 text-blue-300 shrink-0" />
                     <span className="truncate flex-1">{db.name}</span>
                     {db.loading && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+                    {!db.loading && db.error && (
+                      <span title={db.error} className="shrink-0">
+                        <AlertTriangle className="h-3 w-3 text-destructive" />
+                      </span>
+                    )}
                     <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={e => { e.stopPropagation(); onOpenErd(conn.id, db.name) }}
@@ -1185,6 +1191,13 @@ function ConnectionsPanel({
                       </button>
                     </span>
                   </div>
+
+                  {/* Introspection error */}
+                  {db.open && db.error && !db.loading && (
+                    <div className="mx-2 my-1 px-2 py-1.5 rounded border border-destructive/40 bg-destructive/10 text-[10px] text-destructive leading-snug">
+                      {db.error}
+                    </div>
+                  )}
 
                   {/* Schemas */}
                   {(needle ? true : db.open) && db.schemas.filter(schema => !needle || matchingSchemas.has(`${conn.id}::${db.name}::${schema.name}`)).map(schema => {
@@ -2104,25 +2117,24 @@ const quenceTheme = EditorView.theme({
     height: '100%',
     fontSize: '13px',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-    background: 'oklch(0.28 0.01 282)',
-    color: 'oklch(0.97 0 0)',
+    background: 'var(--background)',
+    color: 'var(--foreground)',
   },
-  '.cm-content': { padding: '12px', caretColor: 'oklch(0.9 0.11 98)' },
+  '.cm-content': { padding: '12px', caretColor: 'var(--primary)' },
   '.cm-focused': { outline: 'none' },
   '.cm-scroller': { overflow: 'auto' },
   '.cm-line': { lineHeight: '1.6' },
-  '.cm-cursor': { borderLeftColor: 'oklch(0.9 0.11 98)' },
-  '.cm-selectionBackground, ::selection': { background: 'oklch(0.9 0.11 98 / 0.2)' },
+  '.cm-cursor': { borderLeftColor: 'var(--primary)' },
+  '.cm-selectionBackground, ::selection': { background: 'color-mix(in oklch, var(--primary) 20%, transparent)' },
   '.cm-activeLine': { background: 'oklch(1 0 0 / 0.03)' },
-  // tok-* classes from classHighlighter — matching the app's API/JSON palette
-  '.tok-keyword':                        { color: 'oklch(0.9 0.11 98)', fontWeight: '600' },  // --primary
-  '.tok-string, .tok-string2':           { color: 'oklch(0.76 0.15 160)' },                  // --json-string
-  '.tok-number':                         { color: 'oklch(0.90 0.13 246)' },                  // --json-number
-  '.tok-bool':                           { color: 'oklch(0.89 0.19 15)' },                   // --json-boolean
-  '.tok-operator':                       { color: 'oklch(0.75 0.08 282)' },
-  '.tok-comment, .tok-lineComment, .tok-blockComment': { color: 'oklch(0.55 0.01 282)', fontStyle: 'italic' },
-  '.tok-typeName, .tok-className':       { color: 'oklch(0.90 0.10 100)' },                  // --json-key
-  '.tok-variableName, .tok-propertyName':{ color: 'oklch(0.97 0 0)' },
+  '.tok-keyword':                        { color: 'var(--db-keyword)', fontWeight: '600' },
+  '.tok-string, .tok-string2':           { color: 'var(--db-string)' },
+  '.tok-number':                         { color: 'var(--db-number)' },
+  '.tok-bool':                           { color: 'var(--db-number)' },
+  '.tok-operator':                       { color: 'var(--db-operator)' },
+  '.tok-comment, .tok-lineComment, .tok-blockComment': { color: 'var(--db-comment)', fontStyle: 'italic' },
+  '.tok-typeName, .tok-className':       { color: 'var(--db-type)' },
+  '.tok-variableName, .tok-propertyName':{ color: 'var(--foreground)' },
 }, { dark: true })
 
 interface SqlEditorHandle {
@@ -5419,7 +5431,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
         const schemaRes = await ipc.introspectDb(s.id, dbName)
         if (!schemaRes.ok) {
           setConnections(prev => prev.map(c => c.id !== s.id ? c : {
-            ...c, databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false } : d),
+            ...c, databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false, error: schemaRes.error } : d),
           }))
           continue
         }
@@ -5478,7 +5490,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id !== connId ? c : {
         ...c,
-        databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false } : d),
+        databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false, error: res.error } : d),
       }))
       return
     }
@@ -5521,7 +5533,7 @@ export function DatabaseView({ isActive = true }: { isActive?: boolean }) {
     if (!res.ok) {
       setConnections(prev => prev.map(c => c.id !== connId ? c : {
         ...c,
-        databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false } : d),
+        databases: c.databases.map(d => d.name === dbName ? { ...d, loading: false, error: res.error } : d),
       }))
       return
     }

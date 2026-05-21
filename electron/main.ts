@@ -168,15 +168,16 @@ async function createWindow() {
 app.on('ready', () => {
   createWindow()
 
-  ipcMain.on('window-minimize', () => mainWindow?.minimize())
-  ipcMain.on('window-maximize', () => {
-    if (mainWindow?.isMaximized()) {
-      mainWindow.unmaximize()
+  ipcMain.on('window-minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+  ipcMain.on('window-maximize', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (win?.isMaximized()) {
+      win.unmaximize()
     } else {
-      mainWindow?.maximize()
+      win?.maximize()
     }
   })
-  ipcMain.on('window-close', () => mainWindow?.close())
+  ipcMain.on('window-close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   ipcMain.on('window-set-icon', (_e, mode: string) => {
     if (!mainWindow) return
     const iconFile = mode === 'database'
@@ -931,6 +932,8 @@ app.on('ready', () => {
   const termProcesses = new Map<string, pty.IPty>()
   const termAlive = new Map<string, boolean>()
   const termResizeReady = new Map<string, boolean>()
+  // Popout windows: id → BrowserWindow
+  const termPopouts = new Map<string, BrowserWindow>()
 
   function destroyTerm(id: string) {
     if (!termAlive.get(id)) return
@@ -954,6 +957,11 @@ app.on('ready', () => {
   }
 
   function sendToTerm(id: string, data: string) {
+    const popout = termPopouts.get(id)
+    if (popout && !popout.isDestroyed()) {
+      popout.webContents.send(`pty:data:${id}`, data)
+      return
+    }
     if (!mainWindow || mainWindow.isDestroyed()) return
     mainWindow.webContents.send(`pty:data:${id}`, data)
   }
@@ -1003,8 +1011,9 @@ app.on('ready', () => {
 
     proc.onExit(() => {
       sendToTerm(id, `\r\n\x1b[90m[process exited]\x1b[0m\r\n`)
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      mainWindow.webContents.send(`pty:exit:${id}`)
+      const popout = termPopouts.get(id)
+      if (popout && !popout.isDestroyed()) popout.webContents.send(`pty:exit:${id}`)
+      else if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(`pty:exit:${id}`)
       termAlive.delete(id)
       termResizeReady.delete(id)
       termProcesses.delete(id)
@@ -1027,6 +1036,56 @@ app.on('ready', () => {
 
   ipcMain.handle('pty:kill', (_e, { id }: { id: string }) => {
     destroyTerm(id)
+    return { ok: true }
+  })
+
+  ipcMain.on('pty:popin', (_e, { id }: { id: string }) => {
+    // Tell the main window to reclaim this terminal, then close the popout
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('pty:popin', id)
+      mainWindow.focus()
+    }
+    const popout = termPopouts.get(id)
+    if (popout && !popout.isDestroyed()) popout.close()
+  })
+
+  ipcMain.handle('pty:popout', async (_e, { id, title }: { id: string; title: string }) => {
+    // If already popped out, just focus it
+    const existing = termPopouts.get(id)
+    if (existing && !existing.isDestroyed()) { existing.focus(); return { ok: true } }
+
+    const win = new BrowserWindow({
+      width: 800,
+      height: 500,
+      minWidth: 400,
+      minHeight: 200,
+      title,
+      frame: false,
+      show: false,
+      icon: path.join(__dirname, '..', 'public', process.platform === 'win32' ? 'logo.ico' : 'logo.png'),
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    })
+
+    termPopouts.set(id, win)
+    win.on('closed', () => {
+      termPopouts.delete(id)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('pty:popout-closed', id)
+      }
+    })
+
+    if (isProd) {
+      await win.loadURL(`app://-/terminal?id=${encodeURIComponent(id)}&title=${encodeURIComponent(title)}`)
+    } else {
+      const port = process.argv[2] || 3000
+      await win.loadURL(`http://localhost:${port}/terminal?id=${encodeURIComponent(id)}&title=${encodeURIComponent(title)}`)
+    }
+
+    win.show()
     return { ok: true }
   })
 
@@ -1071,6 +1130,7 @@ app.on('ready', () => {
 })
 
 app.on('window-all-closed', () => {
+  // On non-mac, only quit if there are no popout terminal windows still open
   if (process.platform !== 'darwin') {
     app.quit()
   }
