@@ -1,5 +1,7 @@
 'use client'
 
+const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
+
 interface UpdateBarProps {
   progress: number | null
   downloaded: boolean
@@ -47,7 +49,7 @@ export function UpdateBar({ progress, downloaded, onInstall, onDismiss }: Update
               onClick={onInstall}
               className="text-xs font-medium text-primary hover:text-primary/80 transition-colors whitespace-nowrap"
             >
-              Restart to update
+              {isMac ? 'Quit & update' : 'Restart to update'}
             </button>
             <span className="text-primary/30">·</span>
             <button

@@ -1130,7 +1130,10 @@ if (isProd) {
   process.on('unhandledRejection', () => {})
 
   ipcMain.on('install-update', () => {
-    autoUpdater.quitAndInstall(false, true)
+    log.info('[updater] install-update requested, calling quitAndInstall')
+    // isSilent=true, isForceRunAfter=false — let the user reopen manually.
+    // forceRunAfter=true is unreliable on macOS without notarisation (open -a gets blocked).
+    autoUpdater.quitAndInstall(true, false)
   })
 
   // Check once the first window finishes loading, then every 4 hours
