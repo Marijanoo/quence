@@ -1,6 +1,6 @@
 {
   "name": "quence",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "node server.mjs",
@@ -34,11 +34,13 @@
       "public/logo.icns",
       "node_modules/better-sqlite3/**/*",
       "node_modules/electron-updater/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/pidusage/**/*"
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/pidusage/**/*"
     ],
     "mac": {
       "icon": "public/logo.icns",
@@ -132,7 +134,7 @@
     "mysql2": "^3.22.3",
     "next": "16.2.6",
     "next-themes": "^0.4.6",
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0",
     "pg": "^8.20.0",
     "pidusage": "^4.0.1",
     "react": "^19",
