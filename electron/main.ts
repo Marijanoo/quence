@@ -83,6 +83,8 @@ async function createWindow() {
     height: windowState.height,
     x: windowState.x,
     y: windowState.y,
+    minWidth: 600,
+    minHeight: 400,
     frame: false,
     show: false,
     icon: path.join(__dirname, '..', 'public', process.platform === 'win32' ? 'logo.ico' : 'logo.png'),
@@ -936,8 +938,18 @@ app.on('ready', () => {
     termResizeReady.delete(id)
     const proc = termProcesses.get(id)
     if (proc) {
+      // Suppress the "AttachConsole failed" stderr noise from node-pty's
+      // conpty_console_list_agent on Windows during process teardown
+      const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(process.stderr as any).write = (chunk: string | Uint8Array, ...rest: any[]) => {
+        const s = typeof chunk === 'string' ? chunk : chunk.toString()
+        if (s.includes('AttachConsole') || s.includes('conpty_console_list')) return true
+        return origWrite(chunk, ...rest)
+      }
       try { proc.kill() } catch {}
       termProcesses.delete(id)
+      setTimeout(() => { process.stderr.write = origWrite }, 500)
     }
   }
 

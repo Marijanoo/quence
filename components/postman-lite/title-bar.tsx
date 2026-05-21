@@ -339,7 +339,7 @@ export function TitleBar({
 
   return (
     <div
-      className="flex items-stretch h-8 bg-card border-b border-border select-none"
+      className="flex items-stretch h-8 bg-card border-b border-border select-none overflow-hidden"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* App mode toggle */}
@@ -370,10 +370,10 @@ export function TitleBar({
       <TitleBtn
         onClick={() => onSwitchMode?.(appMode === 'terminal' ? 'api' : 'terminal')}
         title="Terminal"
-        className={appMode === 'terminal' ? 'text-green-400' : ''}
+        className={appMode === 'terminal' ? 'text-green-400 shrink-0' : 'shrink-0'}
       >
         <TerminalSquare className="h-3.5 w-3.5" />
-        Terminal
+        <span className="hidden sm:inline">Terminal</span>
         {terminalCount != null && terminalCount > 0 && (
           <span className="ml-0.5 text-[10px] leading-none px-1 rounded bg-muted text-muted-foreground" style={{ lineHeight: '16px' }}>
             {terminalCount}
@@ -385,7 +385,7 @@ export function TitleBar({
 
       {/* Workspace dropdown */}
       {workspaceDropdown && (
-        <div className="self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div className="self-center min-w-0 shrink overflow-hidden" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {workspaceDropdown}
         </div>
       )}
@@ -395,19 +395,19 @@ export function TitleBar({
       {/* Environment selector */}
       {environments && (
         <>
-          <div className="self-center" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div className="self-center min-w-0 shrink overflow-hidden" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             {environments}
           </div>
           <Sep />
         </>
       )}
 
-      {/* Draggable spacer */}
-      <div className="flex-1 self-stretch" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+      {/* Draggable spacer — absorbs remaining space */}
+      <div className="flex-1 min-w-4 self-stretch" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
-      {/* Right side actions */}
+      {/* Right side actions — fixed, never shrink */}
       <div
-        className="flex items-center gap-0.5 self-stretch pl-2"
+        className="flex items-center gap-0.5 self-stretch pl-2 shrink-0"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {/* Members + Invite dropdowns (owner only) */}
@@ -422,13 +422,13 @@ export function TitleBar({
         {/* Help */}
         <TitleBtn onClick={onOpenHelp} title="Help">
           <HelpCircle className="h-3.5 w-3.5" />
-          Help
+          <span className="hidden sm:inline">Help</span>
         </TitleBtn>
 
         {/* Save */}
         <TitleBtn onClick={onSave} disabled={!canSave} title="Save (Ctrl+S)">
           <Save className="h-3.5 w-3.5" />
-          Save
+          <span className="hidden sm:inline">Save</span>
         </TitleBtn>
 
         <Sep />
