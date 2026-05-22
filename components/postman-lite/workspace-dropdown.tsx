@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, MoreHorizontal, LogOut } from 'lucide-react'
+import { ChevronDown, Check, Plus, Pencil, Trash2, FolderOpen, Download, Upload, MoreHorizontal, LogOut, FolderSearch } from 'lucide-react'
 import type { Workspace } from '@/lib/db/types'
 import { useAuth } from '@/lib/auth/auth-context'
 import { leaveWorkspace } from '@/lib/collaboration/store'
@@ -36,6 +36,7 @@ interface Props {
   onUpdateWorkspace: (id: string, data: Partial<Workspace>) => Promise<void>
   getWorkspace: (id: string) => Workspace | undefined
   onLeave: (id: string) => void
+  onInitFromProject: (name: string, specFiles: { path: string; content: string }[]) => void
 }
 
 function getInitials(name: string) {
@@ -139,6 +140,7 @@ export function WorkspaceDropdown({
   onUpdateWorkspace,
   getWorkspace,
   onLeave,
+  onInitFromProject,
 }: Props) {
   const { state } = useAuth()
   const currentUserId = state.status === 'authenticated' ? state.session.user.id : null
@@ -152,6 +154,12 @@ export function WorkspaceDropdown({
   const [contextPos, setContextPos] = useState({ x: 0, y: 0 })
   const newInputRef = useRef<HTMLInputElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
+
+  // Init from project state
+  const [initScanning, setInitScanning] = useState(false)
+  const [initFoundFiles, setInitFoundFiles] = useState<{ path: string; content: string }[]>([])
+  const [initFolderName, setInitFolderName] = useState('')
+  const [initConfirmOpen, setInitConfirmOpen] = useState(false)
 
   useEffect(() => { if (isCreating) newInputRef.current?.focus() }, [isCreating])
   useEffect(() => { if (renamingId) renameInputRef.current?.focus() }, [renamingId])
@@ -171,6 +179,33 @@ export function WorkspaceDropdown({
     const name = renameValue.trim()
     if (name) { onRename(id, name); setRenamingId(null) }
   }, [renameValue, onRename])
+
+  const handleInitFromProject = useCallback(async () => {
+    setOpen(false)
+    if (!window.electronAPI?.openDirectory || !window.electronAPI?.scanSwagger) return
+    const dirPath = await window.electronAPI.openDirectory()
+    if (!dirPath) return
+    const folderName = dirPath.split(/[\\/]/).pop() || dirPath
+    setInitFolderName(folderName)
+    setInitScanning(true)
+    try {
+      const files = await window.electronAPI.scanSwagger(dirPath)
+      setInitFoundFiles(files)
+      setNewName(folderName)
+      setInitConfirmOpen(true)
+    } finally {
+      setInitScanning(false)
+    }
+  }, [])
+
+  const submitInitFromProject = useCallback(() => {
+    const name = newName.trim() || initFolderName
+    onInitFromProject(name, initFoundFiles)
+    setInitConfirmOpen(false)
+    setInitFoundFiles([])
+    setInitFolderName('')
+    setNewName('')
+  }, [newName, initFolderName, initFoundFiles, onInitFromProject])
 
   const [contextOpen, setContextOpen] = useState(false)
 
@@ -255,6 +290,13 @@ export function WorkspaceDropdown({
             <Plus className="h-3.5 w-3.5" />
             New Workspace
           </DropdownMenuItem>
+
+          {window.electronAPI?.openDirectory && (
+            <DropdownMenuItem onSelect={handleInitFromProject} disabled={initScanning}>
+              <FolderSearch className="h-3.5 w-3.5" />
+              {initScanning ? 'Scanning…' : 'Init from Project'}
+            </DropdownMenuItem>
+          )}
 
           {/* Import/Export */}
           <div className="flex px-1 py-0.5 gap-1">
@@ -361,6 +403,50 @@ export function WorkspaceDropdown({
           <DialogFooter>
             <Button variant="outline" onClick={() => { setIsCreating(false); setNewName('') }}>Cancel</Button>
             <Button onClick={submitCreate} disabled={!newName.trim()}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Init from project confirmation dialog */}
+      <Dialog open={initConfirmOpen} onOpenChange={o => { if (!o) { setInitConfirmOpen(false); setInitFoundFiles([]); setNewName('') } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Init Workspace from Project</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Workspace name</label>
+              <Input
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitInitFromProject() }}
+                placeholder="Workspace name…"
+              />
+            </div>
+            {initFoundFiles.length > 0 ? (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">
+                  Found {initFoundFiles.length} spec file{initFoundFiles.length !== 1 ? 's' : ''} — each will be imported as a collection:
+                </p>
+                <ul className="space-y-1 max-h-48 overflow-y-auto">
+                  {initFoundFiles.map(f => (
+                    <li key={f.path} className="text-xs font-mono text-foreground bg-muted rounded px-2 py-1 truncate" title={f.path}>
+                      {f.path.split(/[\\/]/).slice(-3).join('/')}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No Swagger/OpenAPI spec files found in the project folder. A blank workspace will be created.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setInitConfirmOpen(false); setInitFoundFiles([]); setNewName('') }}>Cancel</Button>
+            <Button onClick={submitInitFromProject} disabled={!newName.trim() && !initFolderName}>
+              {initFoundFiles.length > 0 ? 'Create & Import' : 'Create Workspace'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

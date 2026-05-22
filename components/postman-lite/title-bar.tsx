@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
-import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save, Trash2, Eye, Shield, Loader2, TerminalSquare } from 'lucide-react'
+import { Minus, Square, X, LogOut, User, Users, UserPlus, HelpCircle, Save, Trash2, Eye, Shield, Loader2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,8 +23,6 @@ import { useMyInvites, useWorkspaceMembers } from '@/hooks/use-collaboration'
 import type { Workspace, WorkspacePermission } from '@/lib/db/types'
 
 interface TitleBarProps {
-  appMode?: 'api' | 'database' | 'terminal'
-  onSwitchMode?: (mode: 'api' | 'database' | 'terminal') => void
   workspaceDropdown?: React.ReactNode
   environments?: React.ReactNode
   activeWorkspace?: Workspace | null
@@ -35,7 +33,6 @@ interface TitleBarProps {
   canSave?: boolean
   onInviteAccepted?: (workspaceId: string) => void
   onRefreshWorkspaces?: () => Promise<unknown>
-  terminalCount?: number
 }
 
 function Sep() {
@@ -301,8 +298,6 @@ function InviteDropdown({ hook, onUpdateWorkspace, activeWorkspace }: { hook: Wo
 }
 
 export function TitleBar({
-  appMode = 'api',
-  onSwitchMode,
   workspaceDropdown,
   environments,
   activeWorkspace,
@@ -313,7 +308,6 @@ export function TitleBar({
   canSave,
   onInviteAccepted,
   onRefreshWorkspaces,
-  terminalCount,
 }: TitleBarProps) {
   const [isElectron, setIsElectron] = useState(false)
   const { state, logout } = useAuth()
@@ -342,44 +336,14 @@ export function TitleBar({
       className="flex items-stretch h-8 bg-card border-b border-border select-none overflow-hidden"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* App mode toggle */}
-      <button
-        onClick={() => onSwitchMode?.(appMode === 'api' ? 'database' : 'api')}
-        className="flex items-center gap-1.5 px-3 shrink-0 self-center hover:opacity-80 transition-opacity"
+      {/* App logo */}
+      <div
+        className="flex items-center gap-1.5 px-3 shrink-0 self-center"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        title={`Switch to ${appMode === 'api' ? 'Database' : 'API'} mode`}
       >
-        <Image
-          src={appMode === 'database' ? '/QuenceDB.png' : appMode === 'terminal' ? '/QuenceTN.png' : '/logo.png'}
-          alt="Quence"
-          width={14}
-          height={14}
-          className="shrink-0"
-        />
-        {appMode === 'api'
-          ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-foreground">API</span></>
-          : appMode === 'database'
-          ? <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-blue-400">DB</span></>
-          : <><span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-green-400">TN</span></>
-        }
-      </button>
-
-      <Sep />
-
-      {/* Terminal toggle */}
-      <TitleBtn
-        onClick={() => onSwitchMode?.(appMode === 'terminal' ? 'api' : 'terminal')}
-        title="Terminal"
-        className={appMode === 'terminal' ? 'text-green-400 shrink-0' : 'shrink-0'}
-      >
-        <TerminalSquare className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">Terminal</span>
-        {terminalCount != null && terminalCount > 0 && (
-          <span className="ml-0.5 text-[10px] leading-none px-1 rounded bg-muted text-muted-foreground" style={{ lineHeight: '16px' }}>
-            {terminalCount}
-          </span>
-        )}
-      </TitleBtn>
+        <Image src="/logo.png" alt="Quence" width={14} height={14} className="shrink-0" />
+        <span className="text-xs font-medium text-muted-foreground">Quence</span><span className="text-xs font-semibold text-foreground">API</span>
+      </div>
 
       <Sep />
 
@@ -496,13 +460,13 @@ export function TitleBar({
           </TitleBtn>
         )}
 
-        <Sep />
+      </div>
 
-        {/* Window controls */}
+      {/* Window controls — flush to the right edge */}
+      <div className="flex items-stretch self-stretch shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <button
           className="flex items-center justify-center h-full w-9 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           onClick={() => window.electronAPI?.minimize()}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           tabIndex={-1}
         >
           <Minus className="h-3.5 w-3.5" />
@@ -510,7 +474,6 @@ export function TitleBar({
         <button
           className="flex items-center justify-center h-full w-9 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           onClick={() => window.electronAPI?.maximize()}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           tabIndex={-1}
         >
           <Square className="h-3 w-3" />
@@ -518,7 +481,6 @@ export function TitleBar({
         <button
           className="flex items-center justify-center h-full w-9 text-muted-foreground hover:bg-[oklch(0.65_0.22_25)] hover:text-white transition-colors"
           onClick={() => window.electronAPI?.close()}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           tabIndex={-1}
         >
           <X className="h-3.5 w-3.5" />
