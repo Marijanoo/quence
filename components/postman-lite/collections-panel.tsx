@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Collection, RequestConfig, SocketConfig, HttpMethod, KeyValuePair, AuthConfig, BodyType } from '@/lib/db/types'
 import { createNewSocketConfig } from '@/lib/db/types'
 import { cn, generateId } from '@/lib/utils'
+import { parseYaml, parseOpenApiSpec } from '@/lib/openapi-parser'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -532,35 +533,48 @@ export function CollectionsPanel({
     for (const file of files) {
       try {
         const text = await file.text()
-        const data = JSON.parse(text)
+        const isYaml = file.name.endsWith('.yaml') || file.name.endsWith('.yml')
+        const data = isYaml ? parseYaml(text) : JSON.parse(text)
         // Native export format
-        if (data.collection && Array.isArray(data.requests) && data.collection.id) {
-          onImportCollection(data.collection, data.requests, data.socketConfigs)
-          continue
+        if ((data as Record<string, unknown>).collection && Array.isArray((data as Record<string, unknown>).requests) && (data as Record<string, unknown>).collection) {
+          const d = data as { collection: Collection; requests: RequestConfig[]; socketConfigs?: SocketConfig[] }
+          if (d.collection.id) {
+            onImportCollection(d.collection, d.requests, d.socketConfigs)
+            continue
+          }
         }
         // Native export all collections format (Array of collections)
-        if (Array.isArray(data) && data[0]?.collection && Array.isArray(data[0]?.requests)) {
-          for (const item of data) {
+        if (Array.isArray(data) && (data as unknown[])[0] && (data as Record<string, unknown>[])[0]?.collection) {
+          const arr = data as { collection: Collection; requests: RequestConfig[]; socketConfigs?: SocketConfig[] }[]
+          let anyOk = false
+          for (const item of arr) {
             if (item.collection && Array.isArray(item.requests)) {
-               onImportCollection(item.collection, item.requests, item.socketConfigs)
+              onImportCollection(item.collection, item.requests, item.socketConfigs)
+              anyOk = true
             }
           }
+          if (anyOk) continue
+        }
+        // OpenAPI 3.x / Swagger 2.0 format
+        const openApiResult = parseOpenApiSpec(data)
+        if (openApiResult) {
+          onImportCollection(openApiResult.collection, openApiResult.requests, [])
           continue
         }
         // Postman v2.1 format
-        const result = parsePostmanCollection(data)
-        if (result) {
-          onImportCollection(result.collection, result.requests, result.socketConfigs)
-        } else {
-          failed.push(file.name)
+        const postmanResult = parsePostmanCollection(data)
+        if (postmanResult) {
+          onImportCollection(postmanResult.collection, postmanResult.requests, postmanResult.socketConfigs)
+          continue
         }
+        failed.push(file.name)
       } catch {
         failed.push(file.name)
       }
     }
 
     if (failed.length > 0) {
-      alert(`Failed to import: ${failed.join(', ')}\n\nPlease ensure they are valid Postman v2.1 export files.`)
+      alert(`Failed to import: ${failed.join(', ')}\n\nSupported formats: Quence export, Postman v2.1, OpenAPI 3.x / Swagger 2.0 (JSON or YAML).`)
     }
 
     if (fileInputRef.current) {
@@ -606,7 +620,7 @@ export function CollectionsPanel({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json"
+          accept=".json,.yaml,.yml"
           multiple
           onChange={handleImport}
           className="hidden"

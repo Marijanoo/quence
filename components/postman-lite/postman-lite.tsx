@@ -61,8 +61,6 @@ import { useAuth } from '@/lib/auth/auth-context'
 import type { Workspace, Environment, EnvironmentVariable } from '@/lib/db/types'
 import { leaveWorkspace } from '@/lib/collaboration/store'
 import { PanelBottom, PanelRight, Settings2, ListOrdered, KeyRound, Braces, GitCompare } from 'lucide-react'
-import { DatabaseView } from './database-view'
-import { TerminalView } from './terminal-view'
 
 function friendlyNetworkError(message: string): string {
   const m = message.toLowerCase()
@@ -162,18 +160,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Sequence state
   const [activeView, setActiveView] = useState<'requests' | 'sequences' | 'jwt' | 'json' | 'diff'>('requests')
-  const [appMode, setAppMode] = useState<'api' | 'database' | 'terminal'>(() => {
-    try { return (localStorage.getItem('quence-app-mode') as 'api' | 'database' | 'terminal') || 'api' } catch { return 'api' }
-  })
-  const [terminalCount, setTerminalCount] = useState(0)
-  const [switchingMode, setSwitchingMode] = useState<'api' | 'database' | 'terminal' | null>(null)
-  const switchMode = (mode: 'api' | 'database' | 'terminal') => {
-    setSwitchingMode(mode)
-    setTimeout(() => { setAppMode(mode); try { localStorage.setItem('quence-app-mode', mode) } catch {} }, 150)
-    setTimeout(() => setSwitchingMode(null), 600)
-    window.electronAPI?.setIcon?.(mode)
-  }
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine)
+  const[isOnline, setIsOnline] = useState(() => navigator.onLine)
   useEffect(() => {
     const up = () => setIsOnline(true)
     const down = () => setIsOnline(false)
@@ -1322,16 +1309,15 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
   // Stable ref so the keyboard handler always sees current values without
   // changing the useEffect dep array size (avoids rules-of-hooks violations).
-  const kbStateRef = useRef({ canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode })
+  const kbStateRef = useRef({ canWrite, activeTabId, activeSocketTabId, tabs, socketTabs })
   useEffect(() => {
-    kbStateRef.current = { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode }
+    kbStateRef.current = { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs }
   })
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs, appMode } = kbStateRef.current
-      if (appMode !== 'api') return
+      const { canWrite, activeTabId, activeSocketTabId, tabs, socketTabs } = kbStateRef.current
 
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         if (e.key.toLowerCase() === 's') {
@@ -1384,7 +1370,6 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
   }, [createTab, handleUnifiedCloseTab, setActiveTab, setActiveSocketTabId, openSaveDialog, openSaveSocketDialog, executeRequest]);
 
   useEffect(() => {
-    if (appMode !== 'api') return
     const handleClose = () => {
       const activeId = activeSocketTabId ?? activeTabId
       if (activeId) {
@@ -1401,7 +1386,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       window.electronAPI?.offCloseActiveTab?.(handleClose)
       window.electronAPI?.offNewQueryTab?.(handleNewTab)
     }
-  }, [appMode, activeSocketTabId, activeTabId, handleUnifiedCloseTab, createTab, setActiveSocketTabId])
+  }, [activeSocketTabId, activeTabId, handleUnifiedCloseTab, createTab, setActiveSocketTabId])
 
   // Import collection handler (also receives socket configs from Postman imports)
   const handleImportCollection = useCallback(async (collection: Collection, importedRequests: RequestConfig[], socketConfigs?: SocketConfig[]) => {
@@ -1411,6 +1396,26 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
       await importSocketConfigs(socketConfigs)
     }
   }, [importCollection, importRequests, importSocketConfigs])
+
+  // Init workspace from project folder — create workspace (auto-switched), import all found specs
+  const handleInitFromProject = useCallback(async (name: string, specFiles: { path: string; content: string }[]) => {
+    const { parseYaml, parseOpenApiSpec } = await import('@/lib/openapi-parser')
+    // createWorkspace already calls refresh + setActiveWorkspaceId internally
+    await createWorkspace(name)
+    // Wait for React state to settle so collections/requests hooks pick up the new workspaceId
+    await new Promise(r => setTimeout(r, 200))
+    for (const file of specFiles) {
+      try {
+        const isYaml = file.path.endsWith('.yaml') || file.path.endsWith('.yml')
+        const data = isYaml ? parseYaml(file.content) : JSON.parse(file.content)
+        const result = parseOpenApiSpec(data)
+        if (result) {
+          await importCollection(result.collection)
+          await importRequests(result.requests)
+        }
+      } catch {}
+    }
+  }, [createWorkspace, importCollection, importRequests])
 
   // Workspace export
   const handleExportWorkspace = useCallback(async (workspaceId: string) => {
@@ -1603,20 +1608,8 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           </p>
         </div>
 
-        {/* Mode switch overlay */}
-        <div
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background gap-4 transition-opacity duration-300 pointer-events-none"
-          style={{ opacity: switchingMode ? 1 : 0 }}
-        >
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">
-            {switchingMode === 'database' ? 'Switching to QuenceDB…' : 'Switching to QuenceAPI…'}
-          </p>
-        </div>
         <TitleBar
-          appMode={appMode}
-          onSwitchMode={switchMode}
-          workspaceDropdown={appMode === 'api' ? (
+          workspaceDropdown={(
             <WorkspaceDropdown
               workspaces={workspaces}
               activeWorkspace={activeWorkspace}
@@ -1631,25 +1624,35 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               onUpdateWorkspace={updateWorkspace}
               getWorkspace={(id) => workspaces.find(w => w.id === id)}
               onLeave={handleLeaveWorkspace}
+              onInitFromProject={handleInitFromProject}
             />
-          ) : undefined}
-          environments={appMode === 'api' ? (
+          )}
+          environments={(
             <EnvironmentSelector
               environments={environments}
               activeEnvironment={activeEnvironment}
               onSelect={setActiveEnvironment}
             />
-          ) : undefined}
-          activeWorkspace={appMode === 'api' ? activeWorkspace : undefined}
-          isOwner={appMode === 'api' ? isOwner : false}
-          onUpdateWorkspace={appMode === 'api' ? updateWorkspace : undefined}
-          onOpenHelp={appMode === 'api' ? () => setIsHelpOpen(true) : undefined}
-          onSave={appMode === 'api' ? (activeSocketTabId ? openSaveSocketDialog : openSaveDialog) : undefined}
-          canSave={appMode === 'api' && canWrite && (!!activeTab || !!activeSocketTab)}
+          )}
+          activeWorkspace={activeWorkspace}
+          isOwner={isOwner}
+          onUpdateWorkspace={updateWorkspace}
+          onOpenHelp={() => setIsHelpOpen(true)}
+          onSave={activeSocketTabId ? openSaveSocketDialog : openSaveDialog}
+          canSave={canWrite && (!!activeTab || !!activeSocketTab)}
           onInviteAccepted={(wsId) => switchWorkspace(wsId)}
           onRefreshWorkspaces={refreshWorkspaces}
-          terminalCount={terminalCount}
         />
+
+        {updateProgress !== null && (
+          <UpdateBar
+            progress={updateProgress}
+            downloaded={updateDownloaded}
+            onInstall={() => onInstallUpdate?.()}
+            onDismiss={() => onDismissUpdate?.()}
+          />
+        )}
+
         <input
           ref={workspaceImportRef}
           type="file"
@@ -1668,13 +1671,7 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
 
 
       {/* Main content */}
-      <div className={appMode === 'database' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
-        <DatabaseView isActive={appMode === 'database'} />
-      </div>
-      <div className={appMode === 'terminal' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
-        <TerminalView isActive={appMode === 'terminal'} onCountChange={setTerminalCount} />
-      </div>
-      <div className={appMode === 'api' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+      <div className="flex flex-col flex-1 min-h-0">
       <>
       <ResizablePanelGroup direction="horizontal" className="flex-1">
         {/* Sidebar */}
@@ -1884,24 +1881,11 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
           <span className="text-xs text-muted-foreground/40 select-none">v{version}</span>
         </div>
 
-        {/* Update bar — takes available middle space */}
-        {updateProgress !== null && (
-          <div className="flex-1 min-w-0 flex justify-center">
-            <UpdateBar
-              progress={updateProgress}
-              downloaded={updateDownloaded}
-              onInstall={() => onInstallUpdate?.()}
-              onDismiss={() => onDismissUpdate?.()}
-            />
-          </div>
-        )}
-
         {/* Spacer pushes right group to the end */}
-        {updateProgress === null && <div className="flex-1" />}
+        <div className="flex-1" />
 
         {/* Right: view switcher — shrinks but clips cleanly */}
-        {appMode === 'api' && (
-          <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => setActiveView('requests')}
               title="Requests"
@@ -1973,7 +1957,6 @@ export function PostmanLite({ updateProgress = null, updateDownloaded = false, o
               <span className="hidden md:inline">{responseLayout === 'side' ? 'Response to bottom' : 'Response to side'}</span>
             </button>
           </div>
-        )}
       </div>
 
       {/* Workspace / connectivity strip */}

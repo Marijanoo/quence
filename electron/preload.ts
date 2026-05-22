@@ -31,7 +31,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
-  setIcon: (mode: string) => ipcRenderer.send('window-set-icon', mode),
   zoomIn: () => ipcRenderer.send('window-zoom-in'),
   zoomOut: () => ipcRenderer.send('window-zoom-out'),
   wsConnect: (socketId: string, url: string, headers?: Record<string, string>, protocol?: string) =>
@@ -54,6 +53,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('ws-close')
     ipcRenderer.removeAllListeners('ws-error')
   },
+
+  openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+  scanSwagger: (dirPath: string) => ipcRenderer.invoke('fs:scanSwagger', { dirPath }),
 
   db: {
     auth: {
@@ -118,39 +120,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
       send:         (invite: any) => invoke('db:invites:send', invite),
       delete:       (id: string) => invoke('db:invites:delete', id),
     },
-  },
-  pty: {
-    create:  (id: string, cols: number, rows: number, cwd?: string) => ipcRenderer.invoke('pty:create', { id, cols, rows, cwd }),
-    ready:   (id: string) => ipcRenderer.send('pty:ready', { id }),
-    write:   (id: string, data: string) => ipcRenderer.send('pty:write', { id, data }),
-    line:    (id: string, line: string) => ipcRenderer.send('pty:line', { id, line }),
-    resize:  (id: string, cols: number, rows: number) => ipcRenderer.send('pty:resize', { id, cols, rows }),
-    kill:    (id: string) => ipcRenderer.invoke('pty:kill', { id }),
-    popout:  (id: string, title: string) => ipcRenderer.invoke('pty:popout', { id, title }),
-    homedir: () => ipcRenderer.invoke('pty:homedir'),
-    onData:  (id: string, cb: (data: string) => void) => ipcRenderer.on(`pty:data:${id}`, (_e, data) => cb(data)),
-    onExit:  (id: string, cb: () => void) => ipcRenderer.on(`pty:exit:${id}`, cb),
-    offData: (id: string) => ipcRenderer.removeAllListeners(`pty:data:${id}`),
-    offExit: (id: string) => ipcRenderer.removeAllListeners(`pty:exit:${id}`),
-    stats:   (ids: string[]) => ipcRenderer.invoke('pty:stats', { ids }),
-    onPopoutClosed: (cb: (id: string) => void) => ipcRenderer.on('pty:popout-closed', (_e, id) => cb(id)),
-    onPopIn:        (cb: (id: string) => void) => ipcRenderer.on('pty:popin', (_e, id) => cb(id)),
-    popIn:          (id: string) => ipcRenderer.send('pty:popin', { id }),
-  },
-  pg: {
-    connect:         (opts: any) => ipcRenderer.invoke('pg:connect', opts),
-    disconnect:      (id: string) => ipcRenderer.invoke('pg:disconnect', { id }),
-    query:           (id: string, sql: string, database?: string) => ipcRenderer.invoke('pg:query', { id, sql, database }),
-    introspect:      (id: string) => ipcRenderer.invoke('pg:introspect', { id }),
-    introspectDb:    (id: string, database: string) => ipcRenderer.invoke('pg:introspect-db', { id, database }),
-    selectOvpnFile:  () => ipcRenderer.invoke('pg:select-ovpn-file'),
-  },
-
-  mysql: {
-    connect:      (opts: { id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string }) => ipcRenderer.invoke('mysql:connect', opts),
-    disconnect:   (id: string) => ipcRenderer.invoke('mysql:disconnect', { id }),
-    query:        (id: string, sql: string, database?: string) => ipcRenderer.invoke('mysql:query', { id, sql, database }),
-    introspect:   (id: string) => ipcRenderer.invoke('mysql:introspect', { id }),
-    introspectDb: (id: string, database: string) => ipcRenderer.invoke('mysql:introspect-db', { id, database }),
   },
 })

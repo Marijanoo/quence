@@ -1,13 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
-import { Pool } from 'pg'
-import * as mysql from 'mysql2/promise'
 import * as path from 'path'
 import * as fs from 'fs'
-import { spawn, ChildProcess } from 'child_process'
-import * as pty from 'node-pty'
-import * as os from 'os'
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pidusage = require('pidusage') as (pids: number | number[]) => Promise<Record<number, { cpu: number; memory: number }>>
 import serve from 'electron-serve'
 import WebSocket from 'ws'
 import { io as ioClient } from 'socket.io-client'
@@ -25,7 +18,6 @@ import {
   dbGetInvitesForEmail, dbGetInvitesForWorkspace, dbSendInvite, dbDeleteInvite,
 } from './sqlite-db'
 
-// Swallow EPIPE errors from node-pty ConPTY pipe teardown — these are harmless
 process.on('uncaughtException', (err: any) => {
   if (err?.code === 'EPIPE') return
   throw err
@@ -178,15 +170,6 @@ app.on('ready', () => {
     }
   })
   ipcMain.on('window-close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
-  ipcMain.on('window-set-icon', (_e, mode: string) => {
-    if (!mainWindow) return
-    const iconFile = mode === 'database'
-      ? (process.platform === 'win32' ? 'QuenceDB.ico' : 'QuenceDB.png')
-      : mode === 'terminal'
-      ? (process.platform === 'win32' ? 'QuenceTN.ico' : 'QuenceTN.png')
-      : (process.platform === 'win32' ? 'logo.ico' : 'logo.png')
-    try { mainWindow.setIcon(path.join(__dirname, '..', 'public', iconFile)) } catch {}
-  })
   ipcMain.on('window-zoom-in', () => {
     if (!mainWindow) return
     mainWindow.webContents.setZoomLevel(mainWindow.webContents.getZoomLevel() + 0.5)
@@ -514,620 +497,54 @@ app.on('ready', () => {
     }
   })
 
-  // ── File picker for .ovpn files ─────────────────────────────────────────────
-  ipcMain.handle('pg:select-ovpn-file', async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: 'Select OpenVPN Config',
-      filters: [{ name: 'OpenVPN Config', extensions: ['ovpn'] }, { name: 'All Files', extensions: ['*'] }],
-      properties: ['openFile'],
+})
+
+  // ── Project folder scanning ─────────────────────────────────────────────────
+  ipcMain.handle('dialog:openDirectory', async () => {
+    if (!mainWindow) return { ok: true, data: null }
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Project Folder',
     })
-    return result.canceled ? null : result.filePaths[0]
+    return { ok: true, data: result.canceled ? null : result.filePaths[0] }
   })
 
-  // ── Postgres connections ────────────────────────────────────────────────────
-  const pgPools = new Map<string, Pool>()
-  const vpnProcesses = new Map<string, ChildProcess>()
+  ipcMain.handle('fs:scanSwagger', async (_e, { dirPath }: { dirPath: string }) => {
+    const SWAGGER_FILENAMES = ['swagger.json', 'swagger.yaml', 'swagger.yml', 'openapi.json', 'openapi.yaml', 'openapi.yml']
+    const MAX_DEPTH = 6
+    const MAX_FILES = 50
+    const found: { path: string; content: string }[] = []
 
-  function spawnVpn(id: string, configPath: string, username?: string, password?: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // Use a safe temp filename in the system temp dir (no spaces, no special chars)
-      const safeId = id.replace(/[^a-zA-Z0-9]/g, '')
-      const tmpDir = os.tmpdir()
-      const tmpConfig = path.join(tmpDir, `ovpn-${safeId}.ovpn`)
-      const original = fs.readFileSync(configPath, 'utf-8')
-      fs.writeFileSync(tmpConfig, original)
-
-      const args = ['--config', tmpConfig]
-
-      // Write credentials to a temp file if provided, then pass via --auth-user-pass.
-      // This avoids credentials appearing in process arguments.
-      let tmpAuth: string | null = null
-      if (username || password) {
-        tmpAuth = path.join(tmpDir, `ovpn-auth-${safeId}.txt`)
-        fs.writeFileSync(tmpAuth, `${username ?? ''}\n${password ?? ''}\n`, { mode: 0o600 })
-        args.push('--auth-user-pass', tmpAuth)
-      }
-
-      // Resolve openvpn binary: try PATH first, fall back to the default Windows install location
-      const openvpnBin = process.platform === 'win32'
-        ? 'C:\\Program Files\\OpenVPN\\bin\\openvpn.exe'
-        : 'openvpn'
-      const proc = spawn(openvpnBin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-
-      vpnProcesses.set(id, proc)
-
-      let settled = false
-      let outputLog = ''
-      const timeout = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          reject(new Error(`OpenVPN timed out (30s).\n\nOutput:\n${outputLog || '(none)'}`))
-        }
-      }, 30000)
-
-      const onData = (chunk: Buffer) => {
-        const text = chunk.toString()
-        outputLog += text
-        console.log('[openvpn]', text.trimEnd())
-        if (!settled) {
-          if (text.includes('Initialization Sequence Completed')) {
-            settled = true
-            clearTimeout(timeout)
-            console.log('[openvpn] connected. Full output:\n', outputLog)
-            resolve()
-          } else if (text.includes('AUTH_FAILED')) {
-            settled = true
-            clearTimeout(timeout)
-            reject(new Error('OpenVPN authentication failed. Check your VPN username and password.'))
-          } else if (text.includes('TLS handshake failed') || text.includes('TLS Error')) {
-            settled = true
-            clearTimeout(timeout)
-            reject(new Error(`OpenVPN TLS error.\n\nOutput:\n${outputLog}`))
-          } else if (text.includes('Connection refused') || text.includes('ECONNREFUSED')) {
-            settled = true
-            clearTimeout(timeout)
-            reject(new Error(`OpenVPN server refused connection.\n\nOutput:\n${outputLog}`))
+    function walk(dir: string, depth: number) {
+      if (depth > MAX_DEPTH || found.length >= MAX_FILES) return
+      let entries: fs.Dirent[]
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const entry of entries) {
+        if (found.length >= MAX_FILES) break
+        // Skip hidden dirs and common non-project dirs
+        if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'vendor' || entry.name === 'dist' || entry.name === 'build' || entry.name === '.git') continue
+        const fullPath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(fullPath, depth + 1)
+        } else if (entry.isFile()) {
+          const lower = entry.name.toLowerCase()
+          // Match known filenames or files containing "swagger"/"openapi" in their name
+          if (SWAGGER_FILENAMES.includes(lower) || (lower.endsWith('.json') || lower.endsWith('.yaml') || lower.endsWith('.yml')) && (lower.includes('swagger') || lower.includes('openapi'))) {
+            try {
+              const content = fs.readFileSync(fullPath, 'utf-8')
+              // Quick sanity check: must mention "swagger" or "openapi" in content
+              if (content.includes('"swagger"') || content.includes('"openapi"') || content.includes('swagger:') || content.includes('openapi:')) {
+                found.push({ path: fullPath, content })
+              }
+            } catch {}
           }
         }
       }
-
-      proc.stdout?.on('data', onData)
-      proc.stderr?.on('data', onData)
-
-      const cleanup = () => {
-        try { fs.unlinkSync(tmpConfig) } catch {}
-        if (tmpAuth) try { fs.unlinkSync(tmpAuth) } catch {}
-      }
-
-      proc.on('error', (err) => {
-        if (!settled) {
-          settled = true
-          clearTimeout(timeout)
-          cleanup()
-          vpnProcesses.delete(id)
-          reject(new Error(`Failed to start OpenVPN: ${err.message} (code: ${(err as any).code}). Make sure openvpn.exe is installed and in your PATH.`))
-        }
-      })
-
-      proc.on('exit', (code) => {
-        cleanup()
-        vpnProcesses.delete(id)
-        if (!settled) {
-          settled = true
-          clearTimeout(timeout)
-          reject(new Error(`OpenVPN exited with code ${code}.\n\nOutput:\n${outputLog || '(none)'}`))
-        }
-      })
-    })
-  }
-
-  function killVpn(id: string) {
-    const proc = vpnProcesses.get(id)
-    if (!proc) return
-    try { proc.kill() } catch {}
-    vpnProcesses.delete(id)
-  }
-
-  ipcMain.handle('pg:connect', async (_e, { id, host, port, database, user, password, ssl, vpnConfigPath, vpnUsername, vpnPassword }: {
-    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string
-  }) => {
-    try {
-      if (pgPools.has(id)) {
-        await pgPools.get(id)!.end()
-        pgPools.delete(id)
-      }
-      killVpn(id)
-
-      if (vpnConfigPath) {
-        await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
-      }
-
-      const pool = new Pool({ host, port, database, user, password, ssl: ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 30000 })
-      // Test the connection with an explicit timeout in case TCP opens but server never responds
-      const client = await Promise.race([
-        pool.connect(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 30s')), 30000)),
-      ])
-      client.release()
-      pgPools.set(id, pool)
-      return { ok: true }
-    } catch (err) {
-      killVpn(id)
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('pg:disconnect', async (_e, { id }: { id: string }) => {
-    try {
-      await pgPools.get(id)?.end()
-      pgPools.delete(id)
-      killVpn(id)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  // Per-database query pools: key = `${connId}::${database}`
-  const dbQueryPools = new Map<string, Pool>()
-
-  ipcMain.handle('pg:query', async (_e, { id, sql, database }: { id: string; sql: string; database?: string }) => {
-    const basePool = pgPools.get(id)
-    if (!basePool) return { ok: false, error: 'Not connected' }
-    try {
-      let pool = basePool
-      if (database) {
-        const key = `${id}::${database}`
-        if (!dbQueryPools.has(key)) {
-          const opts = (basePool as any).options as { host: string; port: number; user: string; password: string; ssl: any }
-          const p = new Pool({ host: opts.host, port: opts.port, user: opts.user, password: opts.password, database, ssl: opts.ssl, connectionTimeoutMillis: 15000 })
-          dbQueryPools.set(key, p)
-        }
-        pool = dbQueryPools.get(key)!
-      }
-      const start = Date.now()
-      const result = await pool.query(sql)
-      const ms = Date.now() - start
-      return { ok: true, rows: result.rows, fields: result.fields.map(f => f.name), rowCount: result.rowCount, ms }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('pg:introspect', async (_e, { id }: { id: string }) => {
-    const pool = pgPools.get(id)
-    if (!pool) return { ok: false, error: 'Not connected' }
-    try {
-      const dbRes = await pool.query(
-        `SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname`
-      )
-      return { ok: true, databases: dbRes.rows.map((r: { datname: string }) => r.datname) }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('pg:introspect-db', async (_e, { id, database }: { id: string; database: string }) => {
-    const basePool = pgPools.get(id)
-    if (!basePool) return { ok: false, error: 'Not connected' }
-    // Get the connection config from the existing pool to open a new one against the target database
-    const opts = (basePool as any).options as { host: string; port: number; user: string; password: string; ssl: any }
-    const dbPool = new Pool({ host: opts.host, port: opts.port, user: opts.user, password: opts.password, database, ssl: opts.ssl, connectionTimeoutMillis: 15000 })
-    try {
-      const [tablesRes, funcsRes, enumsRes, typesRes] = await Promise.all([
-        dbPool.query(`
-          SELECT
-            n.nspname AS table_schema,
-            c.relname AS table_name,
-            CASE
-              WHEN c.relkind = 'r' THEN 'BASE TABLE'
-              WHEN c.relkind = 'v' THEN 'VIEW'
-              WHEN c.relkind = 'm' THEN 'MATERIALIZED VIEW'
-              ELSE 'OTHER'
-            END AS table_type
-          FROM pg_class c
-          JOIN pg_namespace n ON c.relnamespace = n.oid
-          WHERE c.relkind IN ('r', 'v', 'm')
-            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-          ORDER BY table_schema, table_name
-        `),
-        dbPool.query(`
-          SELECT
-            n.nspname AS routine_schema,
-            p.proname AS routine_name,
-            pg_get_function_arguments(p.oid) AS arguments
-          FROM pg_proc p
-          JOIN pg_namespace n ON p.pronamespace = n.oid
-          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-          ORDER BY routine_schema, routine_name
-        `),
-        dbPool.query(`
-          SELECT
-            n.nspname AS schema,
-            t.typname AS name,
-            string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS values
-          FROM pg_type t
-          JOIN pg_namespace n ON t.typnamespace = n.oid
-          JOIN pg_enum e ON e.enumtypid = t.oid
-          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-          GROUP BY n.nspname, t.typname
-          ORDER BY schema, name
-        `),
-        dbPool.query(`
-          SELECT
-            n.nspname AS schema,
-            t.typname AS name,
-            CASE t.typtype
-              WHEN 'c' THEN 'composite'
-              WHEN 'd' THEN 'domain'
-              WHEN 'r' THEN 'range'
-              ELSE 'other'
-            END AS definition
-          FROM pg_type t
-          JOIN pg_namespace n ON t.typnamespace = n.oid
-          WHERE t.typtype IN ('c', 'd', 'r')
-            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-          ORDER BY schema, name
-        `),
-      ])
-      return { ok: true, tables: tablesRes.rows, functions: funcsRes.rows, enums: enumsRes.rows, types: typesRes.rows }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    } finally {
-      await dbPool.end()
-    }
-  })
-
-  // ── MySQL connections ───────────────────────────────────────────────────────
-  const mysqlPools = new Map<string, mysql.Pool>()
-
-  ipcMain.handle('mysql:connect', async (_e, { id, host, port, database, user, password, ssl, vpnConfigPath, vpnUsername, vpnPassword }: {
-    id: string; host: string; port: number; database: string; user: string; password: string; ssl: boolean; vpnConfigPath?: string; vpnUsername?: string; vpnPassword?: string
-  }) => {
-    try {
-      if (mysqlPools.has(id)) {
-        await mysqlPools.get(id)!.end()
-        mysqlPools.delete(id)
-      }
-      killVpn(id)
-
-      if (vpnConfigPath) {
-        await spawnVpn(id, vpnConfigPath, vpnUsername, vpnPassword)
-      }
-
-      const pool = mysql.createPool({
-        host, port, database: database || undefined, user, password,
-        ssl: ssl ? { rejectUnauthorized: false } : undefined,
-        connectTimeout: 10000,
-        waitForConnections: true,
-        connectionLimit: 5,
-      })
-      const conn = await Promise.race([
-        pool.getConnection(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connection timed out after 10s')), 10000)),
-      ])
-      conn.release()
-      mysqlPools.set(id, pool)
-      return { ok: true }
-    } catch (err) {
-      killVpn(id)
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('mysql:disconnect', async (_e, { id }: { id: string }) => {
-    try {
-      await mysqlPools.get(id)?.end()
-      mysqlPools.delete(id)
-      killVpn(id)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('mysql:query', async (_e, { id, sql, database }: { id: string; sql: string; database?: string }) => {
-    const pool = mysqlPools.get(id)
-    if (!pool) return { ok: false, error: 'Not connected' }
-    try {
-      const conn = await pool.getConnection()
-      try {
-        if (database) await conn.query(`USE \`${database}\``)
-        const start = Date.now()
-        const [rows, fields] = await conn.query({ sql, rowsAsArray: false }) as [any[], mysql.FieldPacket[]]
-        const ms = Date.now() - start
-        const fieldNames = Array.isArray(fields) ? fields.map((f: any) => f.name) : []
-        const normalizedRows = Array.isArray(rows) ? rows : []
-        return { ok: true, rows: normalizedRows, fields: fieldNames, rowCount: normalizedRows.length, ms }
-      } finally {
-        conn.release()
-      }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('mysql:introspect', async (_e, { id }: { id: string }) => {
-    const pool = mysqlPools.get(id)
-    if (!pool) return { ok: false, error: 'Not connected' }
-    try {
-      const [rows] = await pool.query(`SHOW DATABASES`) as [any[], mysql.FieldPacket[]]
-      const databases = rows.map((r: any) => Object.values(r)[0] as string)
-        .filter(d => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(d))
-      return { ok: true, databases }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  ipcMain.handle('mysql:introspect-db', async (_e, { id, database }: { id: string; database: string }) => {
-    const pool = mysqlPools.get(id)
-    if (!pool) return { ok: false, error: 'Not connected' }
-    try {
-      const conn = await pool.getConnection()
-      try {
-        await conn.query(`USE \`${database}\``)
-        const [[tablesRows], [funcsRows], [enumsRows]] = await Promise.all([
-          conn.query(`
-            SELECT TABLE_NAME AS table_name,
-                   TABLE_TYPE AS table_type
-            FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = ?
-            ORDER BY TABLE_NAME
-          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
-          conn.query(`
-            SELECT ROUTINE_NAME AS routine_name,
-                   ROUTINE_TYPE AS routine_type
-            FROM information_schema.ROUTINES
-            WHERE ROUTINE_SCHEMA = ?
-            ORDER BY ROUTINE_NAME
-          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
-          conn.query(`
-            SELECT COLUMN_NAME AS name,
-                   COLUMN_TYPE AS col_type,
-                   TABLE_NAME  AS table_name
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = ?
-              AND COLUMN_TYPE LIKE 'enum(%)'
-            GROUP BY COLUMN_TYPE, COLUMN_NAME, TABLE_NAME
-            ORDER BY TABLE_NAME, COLUMN_NAME
-          `, [database]) as Promise<[any[], mysql.FieldPacket[]]>,
-        ])
-
-        // Tables and views — MySQL has no schemas, use database name as schema
-        const tables = (tablesRows as any[]).map(r => ({
-          table_schema: database,
-          table_name: r.table_name,
-          table_type: r.table_type === 'BASE TABLE' ? 'BASE TABLE' : r.table_type === 'VIEW' ? 'VIEW' : 'OTHER',
-        }))
-
-        // Functions and procedures
-        const functions = (funcsRows as any[]).map(r => ({
-          routine_schema: database,
-          routine_name: r.routine_name,
-          arguments: r.routine_type === 'PROCEDURE' ? '(procedure)' : '',
-        }))
-
-        // Enums — MySQL enums are per-column, group by type string
-        const enumMap = new Map<string, string[]>()
-        for (const r of enumsRows as any[]) {
-          const match = /^enum\((.+)\)$/i.exec(r.col_type)
-          if (!match) continue
-          const values = match[1].split(',').map((v: string) => v.replace(/^'|'$/g, '').trim())
-          const key = `${r.table_name}.${r.name}`
-          enumMap.set(key, values)
-        }
-        const enums = [...enumMap.entries()].map(([name, values]) => ({ schema: database, name, values }))
-
-        return { ok: true, tables, functions, enums, types: [] }
-      } finally {
-        conn.release()
-      }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  // ── Terminal ────────────────────────────────────────────────────────────────
-  const termProcesses = new Map<string, pty.IPty>()
-  const termAlive = new Map<string, boolean>()
-  const termResizeReady = new Map<string, boolean>()
-  // Popout windows: id → BrowserWindow
-  const termPopouts = new Map<string, BrowserWindow>()
-
-  function destroyTerm(id: string) {
-    if (!termAlive.get(id)) return
-    termAlive.set(id, false)
-    termResizeReady.delete(id)
-    const proc = termProcesses.get(id)
-    if (proc) {
-      // Suppress the "AttachConsole failed" stderr noise from node-pty's
-      // conpty_console_list_agent on Windows during process teardown
-      const origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(process.stderr as any).write = (chunk: string | Uint8Array, ...rest: any[]) => {
-        const s = typeof chunk === 'string' ? chunk : chunk.toString()
-        if (s.includes('AttachConsole') || s.includes('conpty_console_list')) return true
-        return origWrite(chunk, ...rest)
-      }
-      try { proc.kill() } catch {}
-      termProcesses.delete(id)
-      setTimeout(() => { process.stderr.write = origWrite }, 500)
-    }
-  }
-
-  function sendToTerm(id: string, data: string) {
-    const popout = termPopouts.get(id)
-    if (popout && !popout.isDestroyed()) {
-      popout.webContents.send(`pty:data:${id}`, data)
-      return
-    }
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.send(`pty:data:${id}`, data)
-  }
-
-  ipcMain.handle('pty:create', (_e, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
-    // If PTY already exists and is alive, just re-attach (renderer remounted)
-    if (termAlive.get(id) && termProcesses.has(id)) {
-      return { ok: true, reattached: true }
     }
 
-    // Clean up any dead entry before spawning fresh
-    destroyTerm(id)
-
-    const isWin = process.platform === 'win32'
-    const shell = isWin
-      ? (process.env.COMSPEC || 'cmd.exe')
-      : (process.env.SHELL ?? 'bash')
-    const args = isWin ? ['/K'] : []
-    const env = { ...process.env } as Record<string, string>
-    delete env['TERM']
-
-    let proc: pty.IPty
-    try {
-      proc = pty.spawn(shell, args, {
-        name: 'xterm-256color',
-        cols: Math.max(cols || 80, 1),
-        rows: Math.max(rows || 24, 1),
-        cwd: cwd || os.homedir(),
-        env,
-        useConpty: true,
-      })
-    } catch (e: any) {
-      sendToTerm(id, `\r\n\x1b[31m[failed to start terminal: ${e.message}]\x1b[0m\r\n`)
-      return { ok: false, error: e.message }
-    }
-
-    termProcesses.set(id, proc)
-    termAlive.set(id, true)
-
-    // Block resizes for 1s — ConPTY crashes if resized during initialisation
-    setTimeout(() => { if (termAlive.get(id)) termResizeReady.set(id, true) }, 1000)
-
-    proc.onData(data => {
-      if (!termAlive.get(id)) return
-      sendToTerm(id, data)
-    })
-
-    proc.onExit(() => {
-      sendToTerm(id, `\r\n\x1b[90m[process exited]\x1b[0m\r\n`)
-      const popout = termPopouts.get(id)
-      if (popout && !popout.isDestroyed()) popout.webContents.send(`pty:exit:${id}`)
-      else if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(`pty:exit:${id}`)
-      termAlive.delete(id)
-      termResizeReady.delete(id)
-      termProcesses.delete(id)
-    })
-
-    return { ok: true }
+    try { walk(dirPath, 0) } catch {}
+    return { ok: true, data: found }
   })
-
-  ipcMain.on('pty:write', (_e, { id, data }: { id: string; data: string }) => {
-    if (!termAlive.get(id)) return
-    try { termProcesses.get(id)?.write(data) } catch {}
-  })
-
-  ipcMain.on('pty:resize', (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    if (!termAlive.get(id) || !termResizeReady.get(id)) return
-    try { termProcesses.get(id)?.resize(Math.max(cols, 1), Math.max(rows, 1)) } catch {}
-  })
-
-  ipcMain.on('pty:ready', () => {})
-
-  ipcMain.handle('pty:kill', (_e, { id }: { id: string }) => {
-    destroyTerm(id)
-    return { ok: true }
-  })
-
-  ipcMain.on('pty:popin', (_e, { id }: { id: string }) => {
-    // Tell the main window to reclaim this terminal, then close the popout
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('pty:popin', id)
-      mainWindow.focus()
-    }
-    const popout = termPopouts.get(id)
-    if (popout && !popout.isDestroyed()) popout.close()
-  })
-
-  ipcMain.handle('pty:popout', async (_e, { id, title }: { id: string; title: string }) => {
-    // If already popped out, just focus it
-    const existing = termPopouts.get(id)
-    if (existing && !existing.isDestroyed()) { existing.focus(); return { ok: true } }
-
-    const win = new BrowserWindow({
-      width: 800,
-      height: 500,
-      minWidth: 400,
-      minHeight: 200,
-      title,
-      frame: false,
-      show: false,
-      icon: path.join(__dirname, '..', 'public', process.platform === 'win32' ? 'logo.ico' : 'logo.png'),
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        nodeIntegration: false,
-        contextIsolation: true,
-      },
-    })
-
-    termPopouts.set(id, win)
-    win.on('closed', () => {
-      termPopouts.delete(id)
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('pty:popout-closed', id)
-      }
-    })
-
-    if (isProd) {
-      await win.loadURL(`app://-/terminal?id=${encodeURIComponent(id)}&title=${encodeURIComponent(title)}`)
-    } else {
-      const port = process.argv[2] || 3000
-      await win.loadURL(`http://localhost:${port}/terminal?id=${encodeURIComponent(id)}&title=${encodeURIComponent(title)}`)
-    }
-
-    win.show()
-    return { ok: true }
-  })
-
-  ipcMain.handle('pty:homedir', () => os.homedir())
-
-  ipcMain.handle('pty:stats', async (_e, { ids }: { ids: string[] }) => {
-    const pids = ids.map(id => termProcesses.get(id)?.pid).filter((p): p is number => p != null)
-    if (pids.length === 0) return {}
-    try {
-      const stats = await pidusage(pids)
-      const result: Record<string, { cpu: number; memory: number }> = {}
-      for (const id of ids) {
-        const pid = termProcesses.get(id)?.pid
-        if (pid != null && stats[pid]) {
-          result[id] = { cpu: stats[pid].cpu, memory: stats[pid].memory }
-        }
-      }
-      return result
-    } catch {
-      return {}
-    }
-  })
-
-  // Kill all PTYs before Node starts tearing down its environment.
-  // If onData fires after teardown, node-pty throws a C++ exception → SIGABRT.
-  // 'before-quit' fires before 'will-quit' and before window close, giving us
-  // a chance to destroy PTYs while the JS environment is still intact.
-  app.on('before-quit', () => {
-    for (const id of [...termProcesses.keys()]) {
-      destroyTerm(id)
-    }
-    termProcesses.clear()
-    termAlive.clear()
-    termResizeReady.clear()
-  })
-
-  app.on('will-quit', () => {
-    for (const [id] of vpnProcesses) {
-      killVpn(id)
-    }
-  })
-})
 
 app.on('window-all-closed', () => {
   // On non-mac, only quit if there are no popout terminal windows still open
