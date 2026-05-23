@@ -95,7 +95,7 @@ function VariableTag({ variableName, fullMatch, variables, onUpdateVariable }: V
   const currentValue = variable?.value ?? ''
 
   useEffect(() => {
-    if (open) { setEditValue(currentValue); setTimeout(() => inputRef.current?.focus(), 0) }
+    if (open) { setEditValue(currentValue) }
   }, [open, currentValue])
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])

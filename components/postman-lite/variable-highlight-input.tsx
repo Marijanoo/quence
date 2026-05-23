@@ -71,6 +71,7 @@ export function VariableHighlightInput({
   const closeTimerRef = useRef<NodeJS.Timeout | null>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  const editInputFocusedRef = useRef(false)
   const undoStackRef = useRef<{ value: string; selStart: number; selEnd: number }[]>([{ value, selStart: 0, selEnd: 0 }])
   const undoIndexRef = useRef(0)
   const skipUndoPushRef = useRef(false)
@@ -146,8 +147,10 @@ export function VariableHighlightInput({
   }, [])
 
   const scheduleClose = useCallback(() => {
+    if (editInputFocusedRef.current) return
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
     closeTimerRef.current = setTimeout(() => {
+      if (editInputFocusedRef.current) return
       setPopoverMatch(null)
       setPopoverPos(null)
     }, 150)
@@ -164,7 +167,6 @@ export function VariableHighlightInput({
     if (popoverMatch) {
       const variable = variables.find(v => v.key === popoverMatch.variableName && v.enabled)
       setEditValue(variable?.value || '')
-      setTimeout(() => editInputRef.current?.focus(), 0)
     }
   }, [popoverMatch])
 
@@ -473,6 +475,8 @@ export function VariableHighlightInput({
                     value={editValue}
                     onChange={(e) => setEditValue(e.target.value)}
                     onKeyDown={handlePopoverKeyDown}
+                    onFocus={() => { editInputFocusedRef.current = true }}
+                    onBlur={() => { editInputFocusedRef.current = false }}
                     placeholder="Enter value"
                     className="h-8 text-sm font-mono flex-1"
                   />
