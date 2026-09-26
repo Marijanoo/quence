@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { Fragment, useState, useRef, useCallback } from 'react'
 import type { Sequence, SequenceStep, SequenceStepResult, SequenceAction, RequestConfig } from '@/lib/db/types'
 import { generateId } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -120,7 +120,9 @@ export function SequenceBuilder({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  // dragOverPos is an insertion point (0..steps.length: "insert before this index"), not a hovered
+  // row, so the indicator can land above the first row, between any two rows, or after the last one.
+  const [dragOverPos, setDragOverPos] = useState<number | null>(null)
   const [dragStepIdx, setDragStepIdx] = useState<number | null>(null)
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
@@ -209,20 +211,44 @@ export function SequenceBuilder({
   }
 
   // ── Step drag-and-drop ───────────────────────────────────────────────────
+  // dragOverPos tracks an insertion point between rows (computed from which half of the hovered
+  // row the cursor is over), not "the row under the cursor" — that's what let the old version only
+  // ever insert above a row and never below the last one, and made a reorder land one row off from
+  // where the mouse was released (splicing the source out shifts every later index down by one).
 
   const handleStepDragStart = (e: React.DragEvent, idx: number) => {
     setDragStepIdx(idx)
     e.dataTransfer.effectAllowed = 'move'
+    // Firefox requires data to be set for the drag to start at all; also lets other drop targets
+    // (though none exist for this type) see what's being dragged.
+    e.dataTransfer.setData('application/sequence-reorder', String(idx))
   }
 
   const handleStepDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    setDragOverIdx(idx)
+    const rect = e.currentTarget.getBoundingClientRect()
+    const before = e.clientY < rect.top + rect.height / 2
+    setDragOverPos(before ? idx : idx + 1)
   }
 
-  const handleStepDrop = (e: React.DragEvent, targetIdx: number) => {
+  // Clears the indicator only when the pointer actually leaves the list (not when moving from one
+  // row to another, which fires a leave+enter pair on the same mouse movement).
+  const handleListDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragOverPos(null)
+  }
+
+  // Where a dropped step should land, given the insertion point and the index of the step being
+  // moved out of the list (null when the drop is a fresh item from a palette, not a reorder).
+  const resolveDropIndex = (pos: number, removingIdx: number | null) =>
+    removingIdx !== null && pos > removingIdx ? pos - 1 : pos
+
+  const handleStepDrop = (e: React.DragEvent, hoverIdx: number) => {
     e.preventDefault()
+    e.stopPropagation()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const pos = dragOverPos ?? (e.clientY < rect.top + rect.height / 2 ? hoverIdx : hoverIdx + 1)
 
     const rawRequest = e.dataTransfer.getData('application/sequence-request')
     if (rawRequest) {
@@ -231,13 +257,13 @@ export function SequenceBuilder({
         if (!activeSequence) return
         const step: SequenceStep = {
           id: generateId(), type: 'request', requestId: req.id, name: req.name,
-          method: req.method, url: req.url, order: targetIdx,
+          method: req.method, url: req.url, order: pos,
         }
         const steps = [...activeSequence.steps]
-        steps.splice(targetIdx, 0, step)
+        steps.splice(pos, 0, step)
         onUpdateSequence(activeSequence.id, { steps: steps.map((s, i) => ({ ...s, order: i })) })
       } catch { /* ignore */ }
-      setDragOverIdx(null); setDragStepIdx(null)
+      setDragOverPos(null); setDragStepIdx(null)
       return
     }
 
@@ -247,13 +273,13 @@ export function SequenceBuilder({
         const action: SequenceAction = JSON.parse(rawAction)
         if (!activeSequence) return
         const step: SequenceStep = {
-          id: generateId(), type: 'action', name: action.type === 'repeat' ? 'Repeat Request' : 'Extract JSON', action, order: targetIdx,
+          id: generateId(), type: 'action', name: action.type === 'repeat' ? 'Repeat Request' : 'Extract JSON', action, order: pos,
         }
         const steps = [...activeSequence.steps]
-        steps.splice(targetIdx, 0, step)
+        steps.splice(pos, 0, step)
         onUpdateSequence(activeSequence.id, { steps: steps.map((s, i) => ({ ...s, order: i })) })
       } catch { /* ignore */ }
-      setDragOverIdx(null); setDragStepIdx(null)
+      setDragOverPos(null); setDragStepIdx(null)
       return
     }
 
@@ -264,30 +290,36 @@ export function SequenceBuilder({
         if (!activeSequence) return
         if (wouldCreateCycle(sequences, activeSequence.id, dragged.id)) return
         const step: SequenceStep = {
-          id: generateId(), type: 'sequence', sequenceId: dragged.id, name: dragged.name, order: targetIdx,
+          id: generateId(), type: 'sequence', sequenceId: dragged.id, name: dragged.name, order: pos,
         }
         const steps = [...activeSequence.steps]
-        steps.splice(targetIdx, 0, step)
+        steps.splice(pos, 0, step)
         onUpdateSequence(activeSequence.id, { steps: steps.map((s, i) => ({ ...s, order: i })) })
       } catch { /* ignore */ }
-      setDragOverIdx(null); setDragStepIdx(null)
+      setDragOverPos(null); setDragStepIdx(null)
       return
     }
 
-    if (dragStepIdx === null || dragStepIdx === targetIdx || !activeSequence) {
-      setDragOverIdx(null); setDragStepIdx(null)
+    if (dragStepIdx === null || !activeSequence) {
+      setDragOverPos(null); setDragStepIdx(null)
+      return
+    }
+    const targetIdx = resolveDropIndex(pos, dragStepIdx)
+    if (targetIdx === dragStepIdx) {
+      setDragOverPos(null); setDragStepIdx(null)
       return
     }
     const steps = [...activeSequence.steps]
     const [moved] = steps.splice(dragStepIdx, 1)
     steps.splice(targetIdx, 0, moved)
     onUpdateSequence(activeSequence.id, { steps: steps.map((s, i) => ({ ...s, order: i })) })
-    setDragOverIdx(null); setDragStepIdx(null)
+    setDragOverPos(null); setDragStepIdx(null)
   }
 
   const handleListDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    if (dragOverIdx !== null) return
+    // A drop already handled by a row (it calls stopPropagation) never reaches here.
+    setDragOverPos(null)
 
     const rawRequest = e.dataTransfer.getData('application/sequence-request')
     if (rawRequest && activeSequence) {
@@ -505,6 +537,7 @@ export function SequenceBuilder({
               ref={dropZoneRef}
               className="flex-1 overflow-auto p-4"
               onDragOver={e => e.preventDefault()}
+              onDragLeave={handleListDragLeave}
               onDrop={handleListDrop}
             >
               {activeSequence.steps.length === 0 ? (
@@ -513,29 +546,31 @@ export function SequenceBuilder({
                   <p className="text-sm">Drag requests or actions here</p>
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div>
                   {activeSequence.steps.map((step, idx) => {
                     const result = stepResults[step.id]
                     const isAction = step.type === 'action'
                     const isSelected = selectedStepId === step.id
                     return (
-                      <div
-                        key={step.id}
-                        className={cn(
-                          'group rounded-md border border-border bg-card hover:bg-secondary/30 transition-colors',
-                          dragOverIdx === idx && dragStepIdx !== idx && 'border-t-2 border-t-primary',
-                          dragStepIdx === idx && 'opacity-40',
-                          result?.status === 'running' && 'border-[oklch(0.75_0.18_80)]/50',
-                          isAction && 'border-dashed',
-                          isSelected && 'border-primary bg-secondary/30',
+                      <Fragment key={step.id}>
+                        {dragOverPos === idx && (
+                          <div className="h-0.5 my-1 rounded-full bg-primary" />
                         )}
-                        draggable
-                        onDragStart={e => handleStepDragStart(e, idx)}
-                        onDragOver={e => handleStepDragOver(e, idx)}
-                        onDrop={e => handleStepDrop(e, idx)}
-                        onDragEnd={() => { setDragStepIdx(null); setDragOverIdx(null) }}
-                        onClick={() => setSelectedStepId(isSelected ? null : step.id)}
-                      >
+                        <div
+                          className={cn(
+                            'group rounded-md border border-border bg-card hover:bg-secondary/30 transition-colors mt-1 first:mt-0',
+                            dragStepIdx === idx && 'opacity-40',
+                            result?.status === 'running' && 'border-[oklch(0.75_0.18_80)]/50',
+                            isAction && 'border-dashed',
+                            isSelected && 'border-primary bg-secondary/30',
+                          )}
+                          draggable
+                          onDragStart={e => handleStepDragStart(e, idx)}
+                          onDragOver={e => handleStepDragOver(e, idx)}
+                          onDrop={e => handleStepDrop(e, idx)}
+                          onDragEnd={() => { setDragStepIdx(null); setDragOverPos(null) }}
+                          onClick={() => setSelectedStepId(isSelected ? null : step.id)}
+                        >
                         {isAction && step.action?.type === 'extract-json' ? (
                           /* Extract JSON action step */
                           <div className="flex flex-col gap-1.5 px-3 py-2">
@@ -677,9 +712,14 @@ export function SequenceBuilder({
                             </Button>
                           </div>
                         )}
-                      </div>
+                        </div>
+                      </Fragment>
                     )
                   })}
+
+                  {dragOverPos === activeSequence.steps.length && (
+                    <div className="h-0.5 my-1 rounded-full bg-primary" />
+                  )}
                 </div>
               )}
             </div>
